@@ -23,7 +23,7 @@ impl Camera2D {
         // Compute orthographic bounds based on zoom and window aspect ratio
         let half_width = self.aspect * self.zoom;
         let half_height = 1.0 * self.zoom;
-        
+
         let left = self.center.x - half_width;
         let right = self.center.x + half_width;
         let bottom = self.center.y - half_height;

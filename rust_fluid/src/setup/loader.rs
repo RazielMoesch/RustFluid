@@ -8,6 +8,7 @@ pub struct VoxelGrid2D {
     pub ypos: i32,
     pub width: u32,
     pub height: u32,
+    pub rotation_deg: f32,
     pub data: Vec<bool>,
     pub path: PathBuf,
 }
@@ -20,17 +21,17 @@ pub struct VoxelGrid3D {
     pub height: u32,
     pub depth: u32,
     pub data: Vec<bool>,
-    pub path: PathBuf
+    pub path: PathBuf,
 }
 
 impl VoxelGrid2D {
-
-    pub fn new( width: u32, height: u32, data: Vec<bool>, path: PathBuf ) -> Self {
+    pub fn new(width: u32, height: u32, data: Vec<bool>, path: PathBuf) -> Self {
         Self {
             xpos: 0,
             ypos: 0,
             width,
             height,
+            rotation_deg: 0.0,
             data,
             path,
         }
@@ -38,7 +39,7 @@ impl VoxelGrid2D {
 
     pub fn is_solid(&self, x: u32, y: u32) -> bool {
         if x >= self.width || y >= self.height {
-            return false
+            return false;
         }
         self.data[(y * self.width + x) as usize]
     }
@@ -46,7 +47,7 @@ impl VoxelGrid2D {
     pub fn scale(&mut self, factor: f32) -> Result<(), String> {
         let new_width = (self.width as f32 * factor).round() as u32;
         let new_height = (self.height as f32 * factor).round() as u32;
-        let new_grid = Loader::load_svg(&self.path, new_width, new_height)?;
+        let new_grid = Loader::load_svg(&self.path, new_width, new_height, self.rotation_deg)?;
         self.width = new_grid.width;
         self.height = new_grid.height;
         self.data = new_grid.data;
@@ -58,17 +59,50 @@ impl VoxelGrid2D {
         self.ypos += y;
     }
 
+    pub fn rotate(&mut self, rotation_deg: f32) -> Result<(), String> {
+        // To maintain size semantics, we should load it at the current target_width and target_height
+        // However, rotating changes the width and height.
+        // We will pass the *original* target_width and target_height (before rotation was applied).
+        // Since we don't store the original target dimensions, we must re-calculate them.
+        let rad = self.rotation_deg.to_radians();
+        let cos_r = rad.cos().abs();
+        let sin_r = rad.sin().abs();
+        
+        let denom = cos_r * cos_r - sin_r * sin_r;
+        let orig_width = if denom.abs() > 1e-4 {
+            ((self.width as f32 * cos_r - self.height as f32 * sin_r) / denom).max(1.0)
+        } else {
+            self.width as f32
+        };
+        let orig_height = if denom.abs() > 1e-4 {
+            ((self.height as f32 * cos_r - self.width as f32 * sin_r) / denom).max(1.0)
+        } else {
+            self.height as f32
+        };
+
+        self.rotation_deg += rotation_deg;
+        let new_grid = Loader::load_svg(&self.path, orig_width.round() as u32, orig_height.round() as u32, self.rotation_deg)?;
+        self.width = new_grid.width;
+        self.height = new_grid.height;
+        self.data = new_grid.data;
+        Ok(())
+    }
 }
 
 impl VoxelGrid3D {
     pub fn is_solid(&self, x: u32, y: u32, z: u32) -> bool {
         if x >= self.width || y >= self.height || z >= self.depth {
-            return false
+            return false;
         }
         self.data[(z * self.width * self.height + y * self.width + x) as usize]
     }
-    
-    pub fn resize(&self, target_width: u32, target_height: u32, target_depth: u32) -> Result<Self, String> {
+
+    pub fn resize(
+        &self,
+        target_width: u32,
+        target_height: u32,
+        target_depth: u32,
+    ) -> Result<Self, String> {
         Loader::load_stl(&self.path, target_width, target_height, target_depth)
     }
 
@@ -77,41 +111,60 @@ impl VoxelGrid3D {
         self.ypos += y;
         self.zpos += z;
     }
-
 }
 
 pub struct Loader;
 
 impl Loader {
-
-     pub fn load_svg<P: AsRef<Path>>(
+    pub fn load_svg<P: AsRef<Path>>(
         path: P,
         target_width: u32,
         target_height: u32,
-     ) -> Result<VoxelGrid2D, String> {
-
+        rotation_deg: f32,
+    ) -> Result<VoxelGrid2D, String> {
         let path = path.as_ref();
         let svg_data = fs::read(path).map_err(|e| format!("File Read Error: {}", e))?;
 
         let opt = Options::default();
-        let tree = Tree::from_data(&svg_data, &opt)
-            .map_err(|e| format!("SVG Parse Error: {}", e))?;
+        let tree =
+            Tree::from_data(&svg_data, &opt).map_err(|e| format!("SVG Parse Error: {}", e))?;
 
         let svg_size = tree.size();
         let scale_x = target_width as f32 / svg_size.width();
         let scale_y = target_height as f32 / svg_size.height();
         let scale = scale_x.min(scale_y);
 
-        let final_width = (svg_size.width() * scale).round() as u32;
-        let final_height = (svg_size.height() * scale).round() as u32;
-        
+        let base_width = svg_size.width() * scale;
+        let base_height = svg_size.height() * scale;
+
+        let rad = rotation_deg.to_radians();
+        let cos_r = rad.cos().abs();
+        let sin_r = rad.sin().abs();
+
+        let final_width = (base_width * cos_r + base_height * sin_r).round() as u32;
+        let final_height = (base_width * sin_r + base_height * cos_r).round() as u32;
+
         let final_width = final_width.max(1);
         let final_height = final_height.max(1);
 
         let mut pixmap = Pixmap::new(final_width, final_height)
             .ok_or("Failed to allocate pixmap buffer".to_string())?;
 
-        let transform = Transform::from_scale(scale, scale);
+        let cx = svg_size.width() / 2.0;
+        let cy = svg_size.height() / 2.0;
+        
+        let rot_cx = final_width as f32 / 2.0;
+        let rot_cy = final_height as f32 / 2.0;
+
+        let sx = scale * rad.cos();
+        let ky = scale * rad.sin();
+        let kx = -scale * rad.sin();
+        let sy = scale * rad.cos();
+
+        let tx = -cx * sx - cy * kx + rot_cx;
+        let ty = -cx * ky - cy * sy + rot_cy;
+
+        let transform = Transform::from_row(sx, ky, kx, sy, tx, ty);
 
         resvg::render(&tree, transform, &mut pixmap.as_mut());
 
@@ -123,10 +176,17 @@ impl Loader {
             data.push(is_solid);
         }
 
-        Ok(VoxelGrid2D { xpos: 0, ypos: 0, width: final_width, height: final_height, data, path: path.to_path_buf() })
-    }  
-    
-    
+        Ok(VoxelGrid2D {
+            xpos: 0,
+            ypos: 0,
+            width: final_width,
+            height: final_height,
+            rotation_deg,
+            data,
+            path: path.to_path_buf(),
+        })
+    }
+
     pub fn load_stl<P: AsRef<Path>>(
         path: P,
         target_width: u32,
@@ -134,20 +194,27 @@ impl Loader {
         target_depth: u32,
     ) -> Result<VoxelGrid3D, String> {
         let path = path.as_ref();
-        
-        let mut file = std::fs::OpenOptions::new().read(true).open(path)
-            .map_err(|e| format!("File open error: {}", e))?;
-        let mesh = stl_io::read_stl(&mut file)
-            .map_err(|e| format!("STL Parse error: {}", e))?;
 
-        let mut min_x = f32::MAX; let mut max_x = f32::MIN;
-        let mut min_y = f32::MAX; let mut max_y = f32::MIN;
-        let mut min_z = f32::MAX; let mut max_z = f32::MIN;
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(|e| format!("File open error: {}", e))?;
+        let mesh = stl_io::read_stl(&mut file).map_err(|e| format!("STL Parse error: {}", e))?;
+
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_y = f32::MAX;
+        let mut max_y = f32::MIN;
+        let mut min_z = f32::MAX;
+        let mut max_z = f32::MIN;
 
         for v in &mesh.vertices {
-            min_x = min_x.min(v[0]); max_x = max_x.max(v[0]);
-            min_y = min_y.min(v[1]); max_y = max_y.max(v[1]);
-            min_z = min_z.min(v[2]); max_z = max_z.max(v[2]);
+            min_x = min_x.min(v[0]);
+            max_x = max_x.max(v[0]);
+            min_y = min_y.min(v[1]);
+            max_y = max_y.max(v[1]);
+            min_z = min_z.min(v[2]);
+            max_z = max_z.max(v[2]);
         }
 
         let size_x = max_x - min_x;
@@ -191,7 +258,7 @@ impl Loader {
             max_dist = max_dist.max(distance(v0, v1));
             max_dist = max_dist.max(distance(v1, v2));
             max_dist = max_dist.max(distance(v2, v0));
-            
+
             let steps = (max_dist * 2.0).ceil() as usize;
             let steps = steps.max(1);
 
@@ -209,18 +276,22 @@ impl Loader {
                     let vy = py.round() as i32;
                     let vz = pz.round() as i32;
 
-                    if vx >= 0 && vx < target_width as i32 &&
-                       vy >= 0 && vy < target_height as i32 &&
-                       vz >= 0 && vz < target_depth as i32 {
-                        let idx = (vz as u32 * target_width * target_height) + 
-                                  (vy as u32 * target_width) + 
-                                  vx as u32;
+                    if vx >= 0
+                        && vx < target_width as i32
+                        && vy >= 0
+                        && vy < target_height as i32
+                        && vz >= 0
+                        && vz < target_depth as i32
+                    {
+                        let idx = (vz as u32 * target_width * target_height)
+                            + (vy as u32 * target_width)
+                            + vx as u32;
                         data[idx as usize] = true;
                     }
                 }
             }
         }
-        
+
         Ok(VoxelGrid3D {
             xpos: 0,
             ypos: 0,
@@ -232,5 +303,4 @@ impl Loader {
             path: path.to_path_buf(),
         })
     }
-
 }

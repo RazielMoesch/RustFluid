@@ -72,14 +72,24 @@ impl Render2D {
             immediate_size: 0,
         });
 
+        let comp_opts = wgpu::PipelineCompilationOptions {
+            constants: &[
+                ("100", nx as f64),
+                ("101", ny as f64),
+                ("102", scale_limit),
+                ("103", min_threshold),
+            ],
+            ..Default::default()
+        };
+
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render2D Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs"),
-                buffers: &[], 
-                compilation_options: Default::default(),
+                buffers: &[],
+                compilation_options: comp_opts.clone(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -89,16 +99,7 @@ impl Render2D {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[
-                        ("100", nx as f64),
-                        ("101", ny as f64),
-                        ("102", scale_limit),
-                        ("103", min_threshold),
-                    ],
-                    ..Default::default()
-                },
+                compilation_options: comp_opts,
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -118,14 +119,17 @@ impl Render2D {
     }
 
     pub fn update_camera(&self, queue: &wgpu::Queue, matrix: glam::Mat4) {
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[matrix.to_cols_array()]));
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[matrix.to_cols_array()]),
+        );
     }
 
     pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
-        
 
-        render_pass.draw(0..6, 0..1); 
+        render_pass.draw(0..6, 0..1);
     }
 }

@@ -1,16 +1,7 @@
-
-
-
-
 pub mod loader;
 pub mod setup_renderer;
 
-
-
-
 pub struct SimDomain2D {
-
-
     pub w: u32,
     pub h: u32,
     pub edge_1_type: u32, // left
@@ -25,9 +16,7 @@ pub struct SimDomain2D {
 }
 
 impl SimDomain2D {
-
     pub fn new() -> Self {
-
         Self {
             w: 640,
             h: 360,
@@ -41,7 +30,6 @@ impl SimDomain2D {
             edge_4_bc: 0,
             bcs: vec![0.0f32; 256 * 4],
         }
-
     }
 
     pub fn flags(&self) -> Vec<u32> {
@@ -49,22 +37,17 @@ impl SimDomain2D {
 
         for y in 0..self.h {
             for x in 0..self.w {
+                let idx = (x + y * self.w) as usize;
 
-                let idx = ( x + y * self.w ) as usize;
-
-                if x == 0 {
+                if y == 0 {
+                    flags[idx] = (self.edge_2_type << 24) | self.edge_2_bc;
+                } else if y == self.h - 1 {
+                    flags[idx] = (self.edge_3_type << 24) | self.edge_3_bc;
+                } else if x == 0 {
                     flags[idx] = (self.edge_1_type << 24) | self.edge_1_bc;
-                }
-                else if x == self.w - 1 {
+                } else if x == self.w - 1 {
                     flags[idx] = (self.edge_4_type << 24) | self.edge_4_bc;
                 }
-                else if y == 0 {
-                    flags[idx] = (self.edge_2_type << 24) | self.edge_2_bc;
-                }
-                else if y == self.h - 1 {
-                    flags[idx] = (self.edge_3_type << 24) | self.edge_3_bc;
-                }
-
             }
         }
 
@@ -86,19 +69,19 @@ impl SimDomain2D {
             1 => {
                 self.edge_1_type = edge_type;
                 self.edge_1_bc = boundary_config;
-            },
+            }
             2 => {
                 self.edge_2_type = edge_type;
                 self.edge_2_bc = boundary_config;
-            },
+            }
             3 => {
                 self.edge_3_type = edge_type;
                 self.edge_3_bc = boundary_config;
-            },
+            }
             4 => {
                 self.edge_4_type = edge_type;
                 self.edge_4_bc = boundary_config;
-            },
+            }
             _ => {
                 return self;
             }
@@ -116,7 +99,4 @@ impl SimDomain2D {
         }
         self
     }
-
 }
-
-

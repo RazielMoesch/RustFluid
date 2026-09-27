@@ -1,8 +1,65 @@
-
 pub mod utils;
 
 use std::sync::Arc;
 use winit::window::Window;
+
+pub struct GpuCapabilities {
+    pub shader_f16: bool,
+}
+
+impl GpuCapabilities {
+    pub fn from_device(device: &wgpu::Device) -> Self {
+        Self {
+            shader_f16: device.features().contains(wgpu::Features::SHADER_F16),
+        }
+    }
+
+    pub fn validate_precision(
+        &self,
+        precision: crate::sim::lattices::Precision,
+    ) -> Result<(), String> {
+        use crate::sim::lattices::Precision;
+        match precision {
+            Precision::F32 => Ok(()),
+            Precision::F16Storage => {
+                if self.shader_f16 {
+                    Ok(())
+                } else {
+                    Err("FP16Storage requires SHADER_F16 support, which is unavailable on this device".to_string())
+                }
+            }
+            Precision::Auto => Ok(()),
+        }
+    }
+
+    pub fn resolve_precision(
+        &self,
+        precision: crate::sim::lattices::Precision,
+    ) -> Result<crate::sim::lattices::Precision, String> {
+        use crate::sim::lattices::Precision;
+        match precision {
+            Precision::Auto => {
+                if self.shader_f16 {
+                    Ok(Precision::F16Storage)
+                } else {
+                    Ok(Precision::F32)
+                }
+            }
+            Precision::F16Storage => {
+                if self.shader_f16 {
+                    Ok(Precision::F16Storage)
+                } else {
+                    Err("FP16Storage requires SHADER_F16 support, which is unavailable on this device".to_string())
+                }
+            }
+            Precision::F32 => Ok(Precision::F32),
+        }
+    }
+}
+
+pub fn check_f16_support(device: &wgpu::Device) -> bool {
+    device.features().contains(wgpu::Features::SHADER_F16)
+}
 
 pub struct GPU {
     pub instance: wgpu::Instance,
@@ -10,34 +67,43 @@ pub struct GPU {
     pub adapter: wgpu::Adapter,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
-    pub config: wgpu::SurfaceConfiguration
+    pub config: wgpu::SurfaceConfiguration,
 }
 
 impl GPU {
-
-    pub async fn new( window: Arc<Window> ) -> Self {
-
+    pub async fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
-        let surface = instance.create_surface(window.clone()).expect("Surface Creation Failed.");
-        let adapter = instance.request_adapter(
-            &wgpu::RequestAdapterOptions {
+        let surface = instance
+            .create_surface(window.clone())
+            .expect("Surface Creation Failed.");
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
                 ..Default::default()
-            }
-        ).await.expect("Failed to Find Adapter.");
+            })
+            .await
+            .expect("Failed to Find Adapter.");
 
-        let ( device, queue ) = adapter.request_device(
-            &wgpu::DeviceDescriptor {
+        let mut required = wgpu::Features::VERTEX_WRITABLE_STORAGE;
+        if adapter.features().contains(wgpu::Features::SHADER_F16) {
+            required |= wgpu::Features::SHADER_F16;
+        }
+
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
                 label: Some("GPU"),
-                required_features: wgpu::Features::VERTEX_WRITABLE_STORAGE,
+                required_features: required,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
-            }
-        ).await.expect("Failed to Get Device & Queue");
+            })
+            .await
+            .expect("Failed to Get Device & Queue");
 
-        let config = surface.get_default_config(&adapter, size.width, size.height).expect("Failed to Get Configuration");
+        let config = surface
+            .get_default_config(&adapter, size.width, size.height)
+            .expect("Failed to Get Configuration");
         surface.configure(&device, &config);
 
         Self {
@@ -46,22 +112,27 @@ impl GPU {
             adapter,
             device: Arc::new(device),
             queue: Arc::new(queue),
-            config
+            config,
         }
-
     }
 
-    pub fn resize( &mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width == 0 || new_size.height == 0 { return; }
+    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        if new_size.width == 0 || new_size.height == 0 {
+            return;
+        }
 
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
     }
 
+    pub fn capabilities(&self) -> GpuCapabilities {
+        GpuCapabilities::from_device(&self.device)
+    }
 }
 
 pub struct HeadlessGPU {
+    pub adapter: wgpu::Adapter,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
 }
@@ -78,10 +149,15 @@ impl HeadlessGPU {
             .await
             .expect("Failed to find adapter for headless GPU");
 
+        let mut required = wgpu::Features::empty();
+        if adapter.features().contains(wgpu::Features::SHADER_F16) {
+            required |= wgpu::Features::SHADER_F16;
+        }
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Headless GPU"),
-                required_features: wgpu::Features::empty(),
+                required_features: required,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
             })
@@ -89,8 +165,21 @@ impl HeadlessGPU {
             .expect("Failed to get headless device & queue");
 
         Self {
+            adapter,
             device: Arc::new(device),
             queue: Arc::new(queue),
         }
+    }
+
+    pub fn capabilities(&self) -> GpuCapabilities {
+        GpuCapabilities::from_device(&self.device)
+    }
+
+    pub fn adapter_name(&self) -> String {
+        self.adapter.get_info().name
+    }
+
+    pub fn backend_name(&self) -> String {
+        format!("{:?}", self.adapter.get_info().backend)
     }
 }

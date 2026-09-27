@@ -1,83 +1,100 @@
-// --------------------------------------- D2Q9 CONSTANTS ---------------------------------------
-pub(super) const D2Q9_Q: &str = "const Q: u32 = 9u;";
-
-pub(super) const D2Q9_EX: &str = r#"
-const EX = array<i32, 9>(
-    0, 1, 0, -1, 0, 1, -1, -1, 1
-);
-"#;
-
-pub(super) const D2Q9_EY: &str = r#"
-const EY = array<i32, 9>(
-    0, 0, 1, 0, -1, 1, 1, -1, -1
-);
-"#;
-
-pub(super) const D2Q9_WEIGHTS: &str = r#"
-const WEIGHTS = array<f32, 9>(
-    4.0 / 9.0,
-    1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0,
-    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0
-);
-"#;
-
-pub(super) const D2Q9_OPP: &str = r#"
-const OPP = array<u32, 9>(
-    0u, 3u, 4u, 1u, 2u, 7u, 8u, 5u, 6u
-);
-"#;
-
 // ═══════════════════════════════════════════════════════════════════════════
 //  BOUNDARY CONDITIONS (A-A PATTERN: EVEN AND ODD VARIANTS)
 // ═══════════════════════════════════════════════════════════════════════════
 
 // --------------------------------------- FLUID BOUNDARIES ---------------------------------------
 pub(super) const FLUID_PULL_STREAMING_EVEN: &str = r#"
-    pulled_f = fa[neighbour_idx + i * TOTAL_CELLS];
+    pulled_f = load_fa(neighbour_idx + i * TOTAL_CELLS);
 "#;
 
 pub(super) const FLUID_PULL_STREAMING_ODD: &str = r#"
-    pulled_f = fa[neighbour_idx + OPP[i] * TOTAL_CELLS];
+    pulled_f = load_fa(neighbour_idx + OPP[i] * TOTAL_CELLS);
 "#;
-
 
 // --------------------------------------- SOLID BOUNDARIES ---------------------------------------
 pub(super) const SOLID_BOUNCE_BACK_EVEN: &str = r#"
     // Pull from our own cell's opposite direction 
-    pulled_f = fa[cell_idx + OPP[i] * TOTAL_CELLS];
+    pulled_f = load_fa(cell_idx + OPP[i] * TOTAL_CELLS);
 "#;
 
 pub(super) const SOLID_BOUNCE_BACK_ODD: &str = r#"
     // Pull from our own cell's opposite direction (stored non-inverted in this step)
-    pulled_f = fa[cell_idx + i * TOTAL_CELLS];
+    pulled_f = load_fa(cell_idx + i * TOTAL_CELLS);
 "#;
 
+pub(super) const FREE_SLIP_Y_EVEN: &str = r#"
+    // Specular reflection for top/bottom walls (Flips Y, preserves X)
+    pulled_f = load_fa(cell_idx + REFLECT_Y[i] * TOTAL_CELLS);
+"#;
+
+pub(super) const FREE_SLIP_Y_ODD: &str = r#"
+    // Inverted memory read for the specular reflection
+    pulled_f = load_fa(cell_idx + OPP[REFLECT_Y[i]] * TOTAL_CELLS);
+"#;
+
+pub(super) const FREE_SLIP_X_EVEN: &str = r#"
+    // Specular reflection for left/right walls (Flips X, preserves Y)
+    pulled_f = load_fa(cell_idx + REFLECT_X[i] * TOTAL_CELLS);
+"#;
+
+pub(super) const FREE_SLIP_X_ODD: &str = r#"
+    // Inverted memory read for the specular reflection
+    pulled_f = load_fa(cell_idx + OPP[REFLECT_X[i]] * TOTAL_CELLS);
+"#;
 
 // --------------------------------------- INLET BOUNDARIES ---------------------------------------
 pub(super) const INLET_EQUILIBRIUM_EVEN: &str = r#"
+    let cfg = boundary_configs[cfg_id];
     let eu = (f32(ex) * cfg.vel.x) + (f32(ey) * cfg.vel.y);
     let u_sq = dot(cfg.vel, cfg.vel);
     pulled_f = WEIGHTS[i] * cfg.density * (1.0 + 3.0 * eu + 4.5 * (eu * eu) - 1.5 * u_sq);
 "#;
 
 pub(super) const INLET_EQUILIBRIUM_ODD: &str = r#"
+    let cfg = boundary_configs[cfg_id];
     let eu = (f32(ex) * cfg.vel.x) + (f32(ey) * cfg.vel.y);
     let u_sq = dot(cfg.vel, cfg.vel);
     pulled_f = WEIGHTS[i] * cfg.density * (1.0 + 3.0 * eu + 4.5 * (eu * eu) - 1.5 * u_sq);
 "#;
 
+// --------------------------------------- POST-STREAMING BOUNDARIES ---------------------------------------
+pub(super) const ZOU_HE_LEFT_VELOCITY: &str = r#"
+    let my_flag = flags[cell_idx];
+    let my_type = my_flag >> FLAG_TYPE_SHIFT;
+    
+    if (my_type == 5u) {
+        let cfg_id = my_flag & FLAG_ID_MASK;
+        let cfg = boundary_configs[cfg_id];
+        let ux = cfg.vel.x;
+        let uy = cfg.vel.y;
+        
+        // Compute density at the left wall
+        let rho_in = (f_local[0] + f_local[2] + f_local[4] + 2.0 * (f_local[3] + f_local[6] + f_local[7])) / (1.0 - ux);
+        
+        // Solve for the unknown incoming populations
+        f_local[1] = f_local[3] + (2.0 / 3.0) * rho_in * ux;
+        
+        let diff_2_4 = f_local[2] - f_local[4];
+        f_local[5] = f_local[7] - 0.5 * diff_2_4 + (1.0 / 6.0) * rho_in * ux + 0.5 * rho_in * uy;
+        f_local[8] = f_local[6] + 0.5 * diff_2_4 + (1.0 / 6.0) * rho_in * ux - 0.5 * rho_in * uy;
+        
+        // Update macroscopics for the collision step
+        rho = rho_in;
+        u = cfg.vel * rho_in;
+    }
+"#;
 
 // --------------------------------------- OUTLET BOUNDARIES ---------------------------------------
+
 pub(super) const OUTLET_ZERO_GRADIENT_EVEN: &str = r#"
     // Pull from our own cell in the same direction (zero gradient extrapolation)
-    pulled_f = fa[cell_idx + i * TOTAL_CELLS];
+    pulled_f = load_fa(cell_idx + i * TOTAL_CELLS);
 "#;
 
 pub(super) const OUTLET_ZERO_GRADIENT_ODD: &str = r#"
     // Pull from our own cell in the same direction
-    pulled_f = fa[cell_idx + OPP[i] * TOTAL_CELLS];
+    pulled_f = load_fa(cell_idx + OPP[i] * TOTAL_CELLS);
 "#;
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  COLLISION LOGIC (A-A Pattern compatible, operates strictly on f_local)
@@ -165,7 +182,6 @@ pub(super) const MRT_COLLISION: &str = r#"
     f_local[8] = (1.0/36.0) * (4.0*m0 + 2.0*m1 + m2 + 6.0*m3 + 3.0*m4 - 6.0*m5 - 3.0*m6 - 9.0*m8);
 "#;
 
-
 // ═══════════════════════════════════════════════════════════════════════════
 //  BASE TEMPLATES (EVEN, ODD, INIT, EXTRACT)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -186,6 +202,8 @@ const FLAG_ID_MASK: u32 = 0x00FFFFFFu;
 //{EY}
 //{WEIGHTS}
 //{OPP}
+//{REFLECT_Y}
+//{REFLECT_X}
 
 struct BoundaryConfig {
     vel: vec2<f32>,
@@ -193,10 +211,12 @@ struct BoundaryConfig {
     _pad: f32,
 }
 
-@group(0) @binding(0) var<storage, read> fa: array<f32>;
-@group(0) @binding(1) var<storage, read_write> fb: array<f32>;
+@group(0) @binding(0) var<storage, read> fa: array<f32>; // POP_FA
+@group(0) @binding(1) var<storage, read_write> fb: array<f32>; // POP_FB
 @group(0) @binding(2) var<storage, read> flags: array<u32>;
 @group(0) @binding(3) var<storage, read> boundary_configs: array<BoundaryConfig>;
+
+//{PRECISION_HELPERS}
 
 @compute @workgroup_size(wgs_x, wgs_y)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -220,26 +240,34 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
         if (neighbour_pos.x < 0 || neighbour_pos.y < 0 || neighbour_pos.x >= i32(NX) || neighbour_pos.y >= i32(NY)) {
             // Out of bounds domain limits
-            //{SOLID_BOUNDARY_LOGIC_EVEN}
+            //{BOUNCE_BACK_LOGIC_EVEN}
         } else {
             let neighbour_idx = u32(neighbour_pos.x) + (u32(neighbour_pos.y) * NX);
             let raw_flag = flags[neighbour_idx];
             let boundary_type = raw_flag >> FLAG_TYPE_SHIFT;
             let cfg_id = raw_flag & FLAG_ID_MASK;
-            let cfg = boundary_configs[cfg_id];
 
             switch boundary_type {
                 case 0u: {
-                    //{FLUID_BOUNDARY_LOGIC_EVEN}
+                    //{FLUID_PULL_LOGIC_EVEN}
                 }
                 case 1u: {
-                    //{SOLID_BOUNDARY_LOGIC_EVEN}
+                    //{BOUNCE_BACK_LOGIC_EVEN}
                 }
                 case 2u: {
-                    //{INLET_BOUNDARY_LOGIC_EVEN}
+                    //{EQUILIBRIUM_INLET_LOGIC_EVEN}
                 }
                 case 3u: {
-                    //{OUTLET_BOUNDARY_LOGIC_EVEN}
+                    //{ZERO_GRADIENT_OUTLET_LOGIC_EVEN}
+                }
+                case 4u: {
+                    //{FREE_SLIP_Y_LOGIC_EVEN}
+                }
+                case 5u: {
+                    //{FLUID_PULL_LOGIC_EVEN}
+                }
+                case 6u: {
+                    //{FREE_SLIP_X_LOGIC_EVEN}
                 }
                 default: {
                     pulled_f = 0.0;
@@ -252,16 +280,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         u += vec2<f32>(f32(ex), f32(ey)) * pulled_f;
     }
 
+    // --- POST-STREAMING CORRECTION ---
+    //{POST_STREAMING_CORRECTION}
+
     // --- COLLISION ---
     //{COLLISION_LOGIC}
 
     // --- WRITE (INVERTED) ---
     for (var i: u32 = 0u; i < Q; i += 1u) {
-        fb[cell_idx + OPP[i] * TOTAL_CELLS] = f_local[i];
+        store_fb(cell_idx + OPP[i] * TOTAL_CELLS, f_local[i]);
     }
 }
 "#;
-
 
 pub(super) const BASE_STEP_ODD_2D: &str = r#"
 @id(100) override NX: u32 = 1920;
@@ -279,6 +309,8 @@ const FLAG_ID_MASK: u32 = 0x00FFFFFFu;
 //{EY}
 //{WEIGHTS}
 //{OPP}
+//{REFLECT_Y}
+//{REFLECT_X}
 
 struct BoundaryConfig {
     vel: vec2<f32>,
@@ -286,10 +318,12 @@ struct BoundaryConfig {
     _pad: f32,
 }
 
-@group(0) @binding(0) var<storage, read> fa: array<f32>;
-@group(0) @binding(1) var<storage, read_write> fb: array<f32>;
+@group(0) @binding(0) var<storage, read> fa: array<f32>; // POP_FA
+@group(0) @binding(1) var<storage, read_write> fb: array<f32>; // POP_FB
 @group(0) @binding(2) var<storage, read> flags: array<u32>;
 @group(0) @binding(3) var<storage, read> boundary_configs: array<BoundaryConfig>;
+
+//{PRECISION_HELPERS}
 
 @compute @workgroup_size(wgs_x, wgs_y)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -313,26 +347,34 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
         if (neighbour_pos.x < 0 || neighbour_pos.y < 0 || neighbour_pos.x >= i32(NX) || neighbour_pos.y >= i32(NY)) {
             // Out of bounds domain limits
-            //{SOLID_BOUNDARY_LOGIC_ODD}
+            //{BOUNCE_BACK_LOGIC_ODD}
         } else {
             let neighbour_idx = u32(neighbour_pos.x) + (u32(neighbour_pos.y) * NX);
             let raw_flag = flags[neighbour_idx];
             let boundary_type = raw_flag >> FLAG_TYPE_SHIFT;
             let cfg_id = raw_flag & FLAG_ID_MASK;
-            let cfg = boundary_configs[cfg_id];
 
             switch boundary_type {
                 case 0u: {
-                    //{FLUID_BOUNDARY_LOGIC_ODD}
+                    //{FLUID_PULL_LOGIC_ODD}
                 }
                 case 1u: {
-                    //{SOLID_BOUNDARY_LOGIC_ODD}
+                    //{BOUNCE_BACK_LOGIC_ODD}
                 }
                 case 2u: {
-                    //{INLET_BOUNDARY_LOGIC_ODD}
+                    //{EQUILIBRIUM_INLET_LOGIC_ODD}
                 }
                 case 3u: {
-                    //{OUTLET_BOUNDARY_LOGIC_ODD}
+                    //{ZERO_GRADIENT_OUTLET_LOGIC_ODD}
+                }
+                case 4u: {
+                    //{FREE_SLIP_Y_LOGIC_ODD}
+                }
+                case 5u: {
+                    //{FLUID_PULL_LOGIC_ODD}
+                }
+                case 6u: {
+                    //{FREE_SLIP_X_LOGIC_ODD}
                 }
                 default: {
                     pulled_f = 0.0;
@@ -350,7 +392,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     // --- WRITE (NON-INVERTED) ---
     for (var i: u32 = 0u; i < Q; i += 1u) {
-        fb[cell_idx + i * TOTAL_CELLS] = f_local[i];
+        store_fb(cell_idx + i * TOTAL_CELLS, f_local[i]);
     }
 }
 "#;
@@ -376,8 +418,10 @@ const FLAG_TYPE_SHIFT: u32 = 24u;
 
 //{WEIGHTS}
 
-@group(0) @binding(0) var<storage, read_write> fa: array<f32>;
+@group(0) @binding(0) var<storage, read_write> fa: array<f32>; // POP_STORAGE
 @group(0) @binding(2) var<storage, read> flags: array<u32>;
+
+//{PRECISION_HELPERS}
 
 @compute @workgroup_size(wgs_x, wgs_y)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -405,7 +449,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     for ( var i=0u; i < Q; i += 1u ) {
         let eu = ( f32(EX[i]) * u.x ) + ( f32(EY[i]) * u.y );
         let feq = WEIGHTS[i] * rho * ( 1.0 + 3.0 * eu + 4.5 * ( eu * eu ) - u_sq_term );
-        fa[cell_idx + i * TOTAL_CELLS] = feq;
+        store_fa(cell_idx + i * TOTAL_CELLS, feq);
     }
 
 }
@@ -416,15 +460,19 @@ pub(super) const BASE_EXTRACT_2D: &str = r#"
 @id(101) override NY: u32 = 1080;
 @id(105) override wgs_x: u32 = 8;
 @id(106) override wgs_y: u32 = 8;
+@id(107) override is_even: u32 = 1u;
 
 override TOTAL_CELLS = NX * NY;
 
 //{Q}
 //{EX}
 //{EY}
+//{OPP}
 
-@group(0) @binding(0) var<storage, read> fa: array<f32>;
+@group(0) @binding(0) var<storage, read> fa: array<f32>; // POP_FA
 @group(0) @binding(1) var<storage, read_write> macro_data: array<vec4<f32>>;
+
+//{PRECISION_HELPERS}
 
 @compute @workgroup_size(wgs_x, wgs_y)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -442,7 +490,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     for (var i: u32 = 0u; i < Q; i += 1u) {
 
-        let pop = fa[i * TOTAL_CELLS + cell_idx ];
+        let read_idx = select(i, OPP[i], is_even != 0u);
+        let pop = load_fa(read_idx * TOTAL_CELLS + cell_idx);
         rho += pop;
         u += vec2<f32>(f32(EX[i]), f32(EY[i])) * pop;
 
@@ -455,4 +504,49 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     macro_data[cell_idx] = vec4<f32>(u.x, u.y, 0.0, rho);
 
 }
+"#;
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  LATTICE SPECIFIC CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// --------------------------------------- D2Q9 CONSTANTS ---------------------------------------
+pub(super) const D2Q9_Q: &str = "const Q: u32 = 9u;";
+
+pub(super) const D2Q9_EX: &str = r#"
+const EX = array<i32, 9>(
+    0, 1, 0, -1, 0, 1, -1, -1, 1
+);
+"#;
+
+pub(super) const D2Q9_EY: &str = r#"
+const EY = array<i32, 9>(
+    0, 0, 1, 0, -1, 1, 1, -1, -1
+);
+"#;
+
+pub(super) const D2Q9_WEIGHTS: &str = r#"
+const WEIGHTS = array<f32, 9>(
+    4.0 / 9.0,
+    1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0,
+    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0
+);
+"#;
+
+pub(super) const D2Q9_OPP: &str = r#"
+const OPP = array<u32, 9>(
+    0u, 3u, 4u, 1u, 2u, 7u, 8u, 5u, 6u
+);
+"#;
+
+pub(super) const D2Q9_REFLECT_Y: &str = r#"
+const REFLECT_Y = array<u32, 9>(
+    0u, 1u, 4u, 3u, 2u, 8u, 7u, 6u, 5u
+);
+"#;
+
+pub(super) const D2Q9_REFLECT_X: &str = r#"
+const REFLECT_X = array<u32, 9>(
+    0u, 3u, 2u, 1u, 4u, 6u, 5u, 8u, 7u
+);
 "#;

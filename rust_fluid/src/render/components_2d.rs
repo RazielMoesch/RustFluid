@@ -1,4 +1,3 @@
-
 pub(super) const RENDER_VELOCITY_2D: &str = r#"
 @id(100) override NX: u32 = 1920;
 @id(101) override NY: u32 = 1080;
