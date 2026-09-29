@@ -103,7 +103,7 @@ impl ApplicationHandler for App {
 
         if let Some(path) = &self.stl_path {
             println!("Loading STL from {}", path);
-            match crate::setup::loader::Loader::load_stl(path, NX / 2, NY / 2, NZ / 2) {
+            match crate::setup::loader::Loader::load_stl(path, NX / 2, NY / 2, NZ / 2, 0.0, 0.0, 0.0) {
                 Ok(voxel_grid) => {
                     let offset_x = (NX - voxel_grid.width) / 4;
                     let offset_y = (NY - voxel_grid.height) / 2;

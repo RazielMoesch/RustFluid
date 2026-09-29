@@ -81,7 +81,7 @@ impl Camera3D {
             pitch: 0.0,
             distance: 5.0,
             rotation_sens: 0.005,
-            zoom_sens: 5.0,
+            zoom_sens: 15.0,
             pan_sens: 0.1,
         }
     }

@@ -105,7 +105,7 @@ impl VoxelGrid3D {
         target_height: u32,
         target_depth: u32,
     ) -> Result<Self, String> {
-        Loader::load_stl(&self.path, target_width, target_height, target_depth)
+        Loader::load_stl(&self.path, target_width, target_height, target_depth, 0.0, 0.0, 0.0)
     }
 
     pub fn translate(&mut self, x: i32, y: i32, z: i32) {
@@ -194,6 +194,9 @@ impl Loader {
         target_width: u32,
         target_height: u32,
         target_depth: u32,
+        rot_x_deg: f32,
+        rot_y_deg: f32,
+        rot_z_deg: f32,
     ) -> Result<VoxelGrid3D, String> {
         let path = path.as_ref();
 
@@ -217,6 +220,50 @@ impl Loader {
             max_y = max_y.max(v[1]);
             min_z = min_z.min(v[2]);
             max_z = max_z.max(v[2]);
+        }
+
+        let cx = (min_x + max_x) / 2.0;
+        let cy = (min_y + max_y) / 2.0;
+        let cz = (min_z + max_z) / 2.0;
+
+        let rx = rot_x_deg.to_radians();
+        let ry = rot_y_deg.to_radians();
+        let rz = rot_z_deg.to_radians();
+
+        let cos_x = rx.cos(); let sin_x = rx.sin();
+        let cos_y = ry.cos(); let sin_y = ry.sin();
+        let cos_z = rz.cos(); let sin_z = rz.sin();
+
+        min_x = f32::MAX; max_x = f32::MIN;
+        min_y = f32::MAX; max_y = f32::MIN;
+        min_z = f32::MAX; max_z = f32::MIN;
+
+        let mut rotated_vertices = Vec::with_capacity(mesh.vertices.len());
+        for v in &mesh.vertices {
+            let mut x = v[0] - cx;
+            let mut y = v[1] - cy;
+            let mut z = v[2] - cz;
+
+            let y1 = y * cos_x - z * sin_x;
+            let z1 = y * sin_x + z * cos_x;
+            y = y1; z = z1;
+
+            let x1 = x * cos_y + z * sin_y;
+            let z2 = -x * sin_y + z * cos_y;
+            x = x1; z = z2;
+
+            let x2 = x * cos_z - y * sin_z;
+            let y2 = x * sin_z + y * cos_z;
+            x = x2; y = y2;
+
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+            min_z = min_z.min(z);
+            max_z = max_z.max(z);
+            
+            rotated_vertices.push([x, y, z]);
         }
 
         let size_x = max_x - min_x;
@@ -244,11 +291,11 @@ impl Loader {
         let mut index_map = std::collections::HashMap::new();
 
         for face in &mesh.faces {
-            let v0_orig = mesh.vertices[face.vertices[0]];
-            let v1_orig = mesh.vertices[face.vertices[1]];
-            let v2_orig = mesh.vertices[face.vertices[2]];
+            let v0_orig = rotated_vertices[face.vertices[0]];
+            let v1_orig = rotated_vertices[face.vertices[1]];
+            let v2_orig = rotated_vertices[face.vertices[2]];
 
-            let transform = |v: stl_io::Vertex| -> [f32; 3] {
+            let transform = |v: [f32; 3]| -> [f32; 3] {
                 [
                     (v[0] - min_x) * scale + dx,
                     (v[1] - min_y) * scale + dy,

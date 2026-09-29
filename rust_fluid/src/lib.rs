@@ -1,5 +1,6 @@
-pub mod app_no_ui_2d;
-pub mod app_no_ui_3d;
+pub mod example_1_2d;
+pub mod example_1_3d;
+pub mod example_2_3d;
 pub mod camera;
 pub mod gpu;
 pub mod render;

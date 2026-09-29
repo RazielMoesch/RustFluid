@@ -2,6 +2,7 @@ pub mod components_2d;
 pub mod components_3d;
 pub mod mesh;
 pub mod particles;
+pub mod streamlines;
 
 use crate::gpu::utils::{
     bg_entry, bgl_sampler_entry, bgl_storage_entry, bgl_storage_texture_entry, bgl_texture_entry,

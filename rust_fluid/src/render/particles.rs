@@ -313,12 +313,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let out_of_bounds = pos.x < 0.0 || pos.x > f32(NX) || pos.y < 0.0 || pos.y > f32(NY) || pos.z < 0.0 || pos.z > f32(NZ);
     let hit_solid = is_solid(pos);
     
-    // If dead, respawn randomly across the entire domain to prevent clumping!
+    // If dead, respawn at the inlet for a proper wind tunnel stream!
     if (out_of_bounds || hit_solid) {
-        let r1 = hash(i * 13u + u32(pos.x * 1000.0));
-        let r2 = hash(i * 17u + u32(pos.y * 1000.0));
-        let r3 = hash(i * 19u + u32(pos.z * 1000.0));
-        pos = vec3<f32>(r3 * f32(NX), r1 * f32(NY), r2 * f32(NZ));
+        let r1 = hash(i * 13u + u32(abs(pos.x) * 1000.0));
+        let r2 = hash(i * 17u + u32(abs(pos.y) * 1000.0));
+        let r3 = hash(i * 19u + u32(abs(pos.z) * 1000.0));
+        // Spawn near the inlet
+        pos = vec3<f32>(r3 * 10.0 + 1.0, r1 * f32(NY), r2 * f32(NZ));
     }
     
     particles[i].pos_speed = vec4<f32>(pos, speed);
