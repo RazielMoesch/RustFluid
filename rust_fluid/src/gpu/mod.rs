@@ -21,7 +21,7 @@ impl GpuCapabilities {
         use crate::sim::lattices::Precision;
         match precision {
             Precision::F32 => Ok(()),
-            Precision::F16Storage => {
+            Precision::FP16S => {
                 if self.shader_f16 {
                     Ok(())
                 } else {
@@ -40,14 +40,14 @@ impl GpuCapabilities {
         match precision {
             Precision::Auto => {
                 if self.shader_f16 {
-                    Ok(Precision::F16Storage)
+                    Ok(Precision::FP16S)
                 } else {
                     Ok(Precision::F32)
                 }
             }
-            Precision::F16Storage => {
+            Precision::FP16S => {
                 if self.shader_f16 {
-                    Ok(Precision::F16Storage)
+                    Ok(Precision::FP16S)
                 } else {
                     Err("FP16Storage requires SHADER_F16 support, which is unavailable on this device".to_string())
                 }

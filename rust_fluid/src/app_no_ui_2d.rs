@@ -189,7 +189,7 @@ impl ApplicationHandler for App {
         let lattice = Lattice2D::D2Q9(
             D2Q9::new()
             .with_collision_logic(crate::sim::lattices::CollisionLogic::MRT)
-            .with_precision(crate::sim::lattices::Precision::F16Storage)
+            .with_precision(crate::sim::lattices::Precision::FP16S)
             ,
         );
         let lbm = LBM2D::new(

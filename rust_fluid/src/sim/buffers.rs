@@ -59,7 +59,7 @@ impl SimBuffers2D {
         let flags = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Geometry Flags Buffer"),
             size: flags_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -240,7 +240,7 @@ impl SimBuffers3D {
         let flags = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Geometry Flags Buffer 3D"),
             size: flags_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 

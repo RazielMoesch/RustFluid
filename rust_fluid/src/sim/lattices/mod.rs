@@ -28,7 +28,7 @@ pub mod components_3d;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Precision {
     F32,
-    F16Storage,
+    FP16S,
     Auto,
 }
 
@@ -36,24 +36,24 @@ impl Precision {
     pub fn bytes_per_population(self) -> wgpu::BufferAddress {
         match self {
             Precision::F32 | Precision::Auto => 4,
-            Precision::F16Storage => 2,
+            Precision::FP16S => 2,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Precision::F32 => "FP32",
-            Precision::F16Storage => "FP16 Storage / FP32 Compute",
+            Precision::FP16S => "FP16S",
             Precision::Auto => "Auto",
         }
     }
 
     pub fn requires_shader_f16(self) -> bool {
-        matches!(self, Precision::F16Storage)
+        matches!(self, Precision::FP16S)
     }
 
     pub fn is_f16_storage(self) -> bool {
-        matches!(self, Precision::F16Storage)
+        matches!(self, Precision::FP16S)
     }
 }
 
@@ -69,7 +69,7 @@ impl From<Precision> for PrecisionConfig {
                 enable_directive: "",
                 pop_type: "f32",
             },
-            Precision::F16Storage => PrecisionConfig {
+            Precision::FP16S => PrecisionConfig {
                 enable_directive: "enable f16;\n",
                 pop_type: "f16",
             },
@@ -86,13 +86,17 @@ fn store_fb(index: u32, value: f32) { fb[index] = value; }
 "#
             .to_string()
         } else {
-            format!(
-                r#"
-fn load_fa(index: u32) -> f32 {{ return f32(fa[index]); }}
-fn store_fb(index: u32, value: f32) {{ fb[index] = {t}(value); }}
-"#,
-                t = self.pop_type
-            )
+            r#"
+fn load_fa(index: u32) -> f32 {
+    let dir = index / TOTAL_CELLS;
+    return f32(fa[index]) / 32768.0 + WEIGHTS[dir];
+}
+fn store_fb(index: u32, value: f32) {
+    let dir = index / TOTAL_CELLS;
+    fb[index] = f16((value - WEIGHTS[dir]) * 32768.0);
+}
+"#
+            .to_string()
         }
     }
 
@@ -103,12 +107,13 @@ fn store_fa(index: u32, value: f32) { fa[index] = value; }
 "#
             .to_string()
         } else {
-            format!(
-                r#"
-fn store_fa(index: u32, value: f32) {{ fa[index] = {t}(value); }}
-"#,
-                t = self.pop_type
-            )
+            r#"
+fn store_fa(index: u32, value: f32) {
+    let dir = index / TOTAL_CELLS;
+    fa[index] = f16((value - WEIGHTS[dir]) * 32768.0);
+}
+"#
+            .to_string()
         }
     }
 
@@ -120,7 +125,10 @@ fn load_fa(index: u32) -> f32 { return fa[index]; }
             .to_string()
         } else {
             r#"
-fn load_fa(index: u32) -> f32 { return f32(fa[index]); }
+fn load_fa(index: u32) -> f32 {
+    let dir = index / TOTAL_CELLS;
+    return f32(fa[index]) / 32768.0 + WEIGHTS[dir];
+}
 "#
             .to_string()
         }
@@ -325,6 +333,7 @@ impl D2Q9 {
                 .replace("//{EX}", D2Q9_EX)
                 .replace("//{EY}", D2Q9_EY)
                 .replace("//{OPP}", D2Q9_OPP)
+                .replace("//{WEIGHTS}", D2Q9_WEIGHTS)
                 .replace("array<f32>; // POP_FA", &format!("array<{}>;", pop_type))
                 .replace("//{PRECISION_HELPERS}", &pc.extract_helpers());
 
@@ -444,6 +453,50 @@ impl D3Q19 {
                 .replace("array<f32>; // POP_STORAGE", &format!("array<{}>;", pop_type))
                 .replace("//{PRECISION_HELPERS}", &pc.init_helpers());
 
+        let mut unrolled_fast_even = String::new();
+        let mut unrolled_fast_odd = String::new();
+        let mut unrolled_write_even = String::new();
+        let mut unrolled_write_odd = String::new();
+
+        let ex = [0, 1, -1, 0, 0, 0, 0, 1, -1, 1, -1, 1, -1, 1, -1, 0, 0, 0, 0];
+        let ey = [0, 0, 0, 1, -1, 0, 0, 1, 1, -1, -1, 0, 0, 0, 0, 1, -1, 1, -1];
+        let ez = [0, 0, 0, 0, 0, 1, -1, 0, 0, 0, 0, 1, 1, -1, -1, 1, 1, -1, -1];
+        let opp = [0, 2, 1, 4, 3, 6, 5, 10, 9, 8, 7, 14, 13, 12, 11, 18, 17, 16, 15];
+
+        for i in 0..19 {
+            unrolled_fast_even.push_str(&format!(
+                "
+        {{
+            let offset = {dx} + {dy} * i32(NX) + {dz} * i32(NX * NY);
+            let n_idx = u32(i32(cell_idx) + offset);
+            let pulled_f = load_fa(n_idx + {i}u * TOTAL_CELLS);
+            f_local[{i}] = pulled_f;
+            rho += pulled_f;
+            u += vec3<f32>({ex}.0, {ey}.0, {ez}.0) * pulled_f;
+        }}
+                ",
+                i = i, dx = -ex[i], dy = -ey[i], dz = -ez[i], ex = ex[i], ey = ey[i], ez = ez[i]
+            ));
+
+            let read_dir = opp[i];
+            unrolled_fast_odd.push_str(&format!(
+                "
+        {{
+            let offset = {dx} + {dy} * i32(NX) + {dz} * i32(NX * NY);
+            let n_idx = u32(i32(cell_idx) + offset);
+            let pulled_f = load_fa(n_idx + {read_dir}u * TOTAL_CELLS);
+            f_local[{i}] = pulled_f;
+            rho += pulled_f;
+            u += vec3<f32>({ex}.0, {ey}.0, {ez}.0) * pulled_f;
+        }}
+                ",
+                i = i, dx = -ex[i], dy = -ey[i], dz = -ez[i], read_dir = read_dir, ex = ex[i], ey = ey[i], ez = ez[i]
+            ));
+
+            unrolled_write_even.push_str(&format!("    store_fb(cell_idx + {opp}u * TOTAL_CELLS, f_local[{i}]);\n", opp = opp[i], i = i));
+            unrolled_write_odd.push_str(&format!("    store_fb(cell_idx + {i}u * TOTAL_CELLS, f_local[{i}]);\n", i = i));
+        }
+
         let step_even_template = if self.pure_fluid { PURE_FLUID_STEP_EVEN_3D } else { BASE_STEP_EVEN_3D };
         let step_even_wgsl = format!("{}", pc.enable_directive)
             + &step_even_template
@@ -465,6 +518,8 @@ impl D3Q19 {
                 .replace("//{REFLECT_X}", D3Q19_REFLECT_X)
                 .replace("//{REFLECT_Z}", D3Q19_REFLECT_Z)
                 .replace("//{POST_STREAMING_CORRECTION}", ZOU_HE_3D)
+                .replace("//{UNROLLED_FAST_PATH_EVEN}", &unrolled_fast_even)
+                .replace("//{UNROLLED_WRITE_EVEN}", &unrolled_write_even)
                 .replace("array<f32>; // POP_FA", &format!("array<{}>;", pop_type))
                 .replace("array<f32>; // POP_FB", &format!("array<{}>;", pop_type))
                 .replace("//{PRECISION_HELPERS}", &pc.step_helpers());
@@ -490,6 +545,8 @@ impl D3Q19 {
                 .replace("//{REFLECT_X}", D3Q19_REFLECT_X)
                 .replace("//{REFLECT_Z}", D3Q19_REFLECT_Z)
                 .replace("//{POST_STREAMING_CORRECTION}", ZOU_HE_3D)
+                .replace("//{UNROLLED_FAST_PATH_ODD}", &unrolled_fast_odd)
+                .replace("//{UNROLLED_WRITE_ODD}", &unrolled_write_odd)
                 .replace("array<f32>; // POP_FA", &format!("array<{}>;", pop_type))
                 .replace("array<f32>; // POP_FB", &format!("array<{}>;", pop_type))
                 .replace("//{PRECISION_HELPERS}", &pc.step_helpers());
@@ -501,6 +558,7 @@ impl D3Q19 {
                 .replace("//{EY}", D3Q19_EY)
                 .replace("//{EZ}", D3Q19_EZ)
                 .replace("//{OPP}", D3Q19_OPP)
+                .replace("//{WEIGHTS}", D3Q19_WEIGHTS)
                 .replace("array<f32>; // POP_FA", &format!("array<{}>;", pop_type))
                 .replace("//{PRECISION_HELPERS}", &pc.extract_helpers());
 

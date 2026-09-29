@@ -468,6 +468,7 @@ override TOTAL_CELLS = NX * NY;
 //{EX}
 //{EY}
 //{OPP}
+//{WEIGHTS}
 
 @group(0) @binding(0) var<storage, read> fa: array<f32>; // POP_FA
 @group(0) @binding(1) var<storage, read_write> macro_data: array<vec4<f32>>;

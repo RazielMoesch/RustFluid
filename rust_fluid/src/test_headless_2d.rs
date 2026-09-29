@@ -237,7 +237,7 @@ async fn run_async() {
     // --- FP16Storage benchmark ---
     if capabilities.shader_f16 {
         println!("\n>>> Running FP16Storage benchmark...");
-        let fp16_out = run_benchmark(&gpu, Precision::F16Storage);
+        let fp16_out = run_benchmark(&gpu, Precision::FP16S);
         
         println!("{}", fp16_out.result);
         print_sustained_stats(&fp16_out.result, BATCH_SIZE);

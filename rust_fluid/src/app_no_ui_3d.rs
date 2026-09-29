@@ -189,7 +189,7 @@ impl ApplicationHandler for App {
         let lattice = Lattice3D::D3Q19(
             D3Q19::new()
                 .with_collision_logic(CollisionLogic::BGK)
-                .with_precision(Precision::F16Storage),
+                .with_precision(Precision::FP16S),
         );
         
         let boundary_config_count = domain.bcs.len().max(1) as u32;
