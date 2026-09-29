@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1">
+      <stop offset="0%" stop-color="#091827"/>
+      <stop offset="100%" stop-color="#0e1d32"/>
+    </linearGradient>
+    <linearGradient id="flow" x1="0" x2="1">
+      <stop offset="0%" stop-color="#73d7ff"/>
+      <stop offset="50%" stop-color="#b7f0ff"/>
+      <stop offset="100%" stop-color="#ff9c5b"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2.4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="620" fill="url(#bg)"/>
+  <text x="52" y="60" fill="#dfefff" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700">RustFluid 3D cylinder wake</text>
+  <text x="52" y="94" fill="#9bc7ff" font-family="Arial, Helvetica, sans-serif" font-size="18">D3Q19 WGSL solver • animated wake visualization</text>
+
+  <g opacity="0.7" stroke="url(#flow)" stroke-width="3" fill="none" filter="url(#glow)">
+    <path d="M 140 420 C 250 320, 330 280, 430 260 S 620 250, 760 300 S 920 360, 1030 300"/>
+    <path d="M 160 456 C 280 350, 360 310, 470 290 S 655 295, 780 340 S 920 410, 1020 380"/>
+    <path d="M 150 390 C 250 320, 330 290, 430 280 S 620 275, 760 325 S 930 360, 1040 330"/>
+  </g>
+
+  <g>
+    <ellipse cx="420" cy="370" rx="76" ry="52" fill="rgba(255,255,255,0.04)" stroke="#abc9ff" stroke-width="3"/>
+    <ellipse cx="420" cy="370" rx="20" ry="20" fill="#dfefff" opacity="0.4"/>
+    <circle cx="420" cy="370" r="14" fill="#e9f5ff" stroke="#9cc4ff" stroke-width="2"/>
+    <rect x="250" y="285" width="100" height="170" rx="18" fill="rgba(150,180,255,0.1)" stroke="#8bb6ff" stroke-width="2"/>
+    <rect x="520" y="250" width="130" height="210" rx="22" fill="rgba(120,160,255,0.06)" stroke="#7ea4ff" stroke-width="2"/>
+    <path d="M 540 470 L 740 300" stroke="#9cc9ff" stroke-opacity="0.65" stroke-width="2" fill="none"/>
+  </g>
+
+  <g>
+    <circle cx="180" cy="340" r="6" fill="#8be4ff">
+      <animate attributeName="cx" values="180; 260; 340; 430; 540; 720; 1040" dur="5s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="340; 320; 300; 290; 310; 345; 415" dur="5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="205" cy="380" r="5" fill="#b9f0ff">
+      <animate attributeName="cx" values="205; 310; 410; 500; 680; 900; 1085" dur="5.5s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="380; 350; 330; 300; 330; 390; 420" dur="5.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="250" cy="430" r="7" fill="#ffb067">
+      <animate attributeName="cx" values="250; 360; 470; 610; 760; 915; 1060" dur="6s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="430; 410; 390; 360; 360; 405; 470" dur="6s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <g font-family="Arial, Helvetica, sans-serif">
+    <rect x="790" y="70" width="320" height="140" rx="18" fill="rgba(9,27,46,0.85)" stroke="#93b7ff" stroke-width="2"/>
+    <text x="820" y="115" fill="#dff3ff" font-size="24" font-weight="700">3D cylinder wake</text>
+    <text x="820" y="145" fill="#d0ebff" font-size="18">• D3Q19 lattice</text>
+    <text x="820" y="176" fill="#d0ebff" font-size="18">• WGSL compute shaders</text>
+    <text x="820" y="186" fill="#d0ebff" font-size="18" opacity="0"> </text>
+  </g>
+</svg>

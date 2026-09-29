@@ -9,7 +9,7 @@ use crate::render::{Render3D, RenderMode3D};
 use crate::sim::lattices::{CollisionLogic, D3Q19, Lattice3D, Precision};
 use crate::sim::lbm::LBM3D;
 
-const STEPS_PER_FRAME: u32 = 10; // Increased to let flow develop faster
+const STEPS_PER_FRAME: u32 = 1; // Increased to let flow develop faster
 
 // Lattice resolution (defines the grid size)
 const NX: u32 = 768;
@@ -57,6 +57,7 @@ struct SimState {
     setup_time: std::time::Duration,
     sim_start: std::time::Instant,
     printed_stats: bool,
+    paused: bool,
 }
 
 impl ApplicationHandler for App {
@@ -315,6 +316,7 @@ impl ApplicationHandler for App {
             setup_time: t1.elapsed(),
             sim_start: std::time::Instant::now(),
             printed_stats: false,
+            paused: false,
         });
     }
 
@@ -395,6 +397,10 @@ impl ApplicationHandler for App {
                         winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Digit2) => {
                             state.render_mode = crate::render::RenderMode3D::FlowStreams;
                             println!("Render Mode: Flow Streams");
+                        }
+                        winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Space) => {
+                            state.paused = !state.paused;
+                            println!("Simulation {}", if state.paused { "paused" } else { "resumed" });
                         }
                         _ => {}
                     }
@@ -520,19 +526,21 @@ impl ApplicationHandler for App {
                 let view_proj = state.camera.matrix();
                 state.renderer.update_camera(queue, inv_view_proj, view_proj, state.camera.eye, state.max_speed, state.iso_q, state.render_mode as u32);
 
-                // compute: step + extract + vorticity
-                state.lbm.step_multiple(&mut encoder, STEPS_PER_FRAME);
-                state.lbm.extract(&mut encoder);
-                
-                if state.render_mode == crate::render::RenderMode3D::QCriterion {
-                    state.renderer.compute_vorticity(&mut encoder);
-                } else if state.render_mode == crate::render::RenderMode3D::FlowStreams {
-                    // We need a compute pass to advect the particles
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Particle Advection Pass"),
-                        timestamp_writes: None,
-                    });
-                    state.particle_renderer.advect(&mut pass);
+                if !state.paused {
+                    // compute: step + extract + vorticity
+                    state.lbm.step_multiple(&mut encoder, STEPS_PER_FRAME);
+                    state.lbm.extract(&mut encoder);
+                    
+                    if state.render_mode == crate::render::RenderMode3D::QCriterion {
+                        state.renderer.compute_vorticity(&mut encoder);
+                    } else if state.render_mode == crate::render::RenderMode3D::FlowStreams {
+                        // We need a compute pass to advect the particles
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Particle Advection Pass"),
+                            timestamp_writes: None,
+                        });
+                        state.particle_renderer.advect(&mut pass);
+                    }
                 }
 
                 // render pass
