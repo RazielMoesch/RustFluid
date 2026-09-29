@@ -8,13 +8,18 @@ The codebase is organized around reusable simulation kernels, boundary logic, an
 ## Demo
 
 <div align="center">
-  <img src="./assets/3d_example.png" alt="3D cylinder wake demo" width="860" />
+  <img src="./assets/3d_example.png" alt="3D cylinder wake demo" width="560" />
   <p><em>Figure 1 — 3D cylinder wake demo (same WGSL-driven solver used for the headless validation case).</em></p>
 </div>
 
 <div align="center">
+  <img src="./assets/3d_example_2.png" alt="3D F35 Streamlines" width="560" />
+  <p><em>Figure 2 —3D F35 STL File demo of streamlines over object.</em></p>
+</div>
+
+<div align="center">
   <img src="./assets/2d_example.png" alt="2D D2Q9 velocity field" width="560" />
-  <p><em>Figure 2 — 2D D2Q9 velocity field shown separately so it is clear this is the 2D case, not the 3D wake.</em></p>
+  <p><em>Figure 3 — 2D D2Q9 velocity field shown separately so it is clear this is the 2D case, not the 3D wake.</em></p>
 </div>
 
 ## Feature list
@@ -24,7 +29,7 @@ The codebase is organized around reusable simulation kernels, boundary logic, an
 - Precision modes: FP32, FP16S, and Auto
 - Boundary types: fluid cells, solid bounce-back, free-slip walls, inlet equilibrium, outlet zero-gradient, and Zou-He inlet/velocity handling
 - Forcing: body-force support through `FORCE_X`, `FORCE_Y`, and `FORCE_Z`, including the cylinder-wake forcing pattern used for the FluidX3D-matched case
-- Rendering modes: 2D velocity and curl views, plus 3D vorticity/Q-criterion style visualization
+- Rendering modes: 2D velocity and curl views, plus 3D vorticity/Q-criterion style visualization and true 3D flow streamlines (ribbon-renderer with flexible spawn domains)
 - Headless benchmarking: automated throughput tests, workgroup sweeps, and CSV export of benchmark results
 - Experimental: FP16S storage, MRT, auto-tuned workgroup selection, and zero/weak forcing drift checks are treated as experimental diagnostics rather than “fully identical” physics guarantees
 
@@ -85,8 +90,9 @@ Because each concern is isolated, you can prototype new features without needing
 
 ## Project layout
 
-- `src/app_no_ui_2d.rs` — 2D Windowed svg-flow app
-- `src/app_no_ui_3d.rs` — 3D windowed cylinder-flow app
+- `src/example_1_2d.rs` — 2D Windowed svg-flow app
+- `src/example_1_3d.rs` — 3D windowed cylinder-flow app
+- `src/example_2_3d.rs` — 3D windowed F-35 streamline flow app
 - `src/test_headless_2d.rs` — 2D benchmark and validation harness
 - `src/test_headless_3d.rs` — 3D benchmark and diagnostics harness
 - `src/sim/` — lattice definitions, buffers, validation logic, and benchmark math
