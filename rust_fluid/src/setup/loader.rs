@@ -22,6 +22,8 @@ pub struct VoxelGrid3D {
     pub depth: u32,
     pub data: Vec<bool>,
     pub path: PathBuf,
+    pub mesh_vertices: Vec<[f32; 3]>,
+    pub mesh_indices: Vec<u32>,
 }
 
 impl VoxelGrid2D {
@@ -237,6 +239,10 @@ impl Loader {
             ((v1[0] - v2[0]).powi(2) + (v1[1] - v2[1]).powi(2) + (v1[2] - v2[2]).powi(2)).sqrt()
         };
 
+        let mut mesh_vertices = Vec::new();
+        let mut mesh_indices = Vec::new();
+        let mut index_map = std::collections::HashMap::new();
+
         for face in &mesh.faces {
             let v0_orig = mesh.vertices[face.vertices[0]];
             let v1_orig = mesh.vertices[face.vertices[1]];
@@ -253,6 +259,16 @@ impl Loader {
             let v0 = transform(v0_orig);
             let v1 = transform(v1_orig);
             let v2 = transform(v2_orig);
+
+            for v in &[v0, v1, v2] {
+                let key = (v[0].to_bits(), v[1].to_bits(), v[2].to_bits());
+                let idx = *index_map.entry(key).or_insert_with(|| {
+                    let new_idx = mesh_vertices.len() as u32;
+                    mesh_vertices.push(*v);
+                    new_idx
+                });
+                mesh_indices.push(idx);
+            }
 
             let mut max_dist = 0.0_f32;
             max_dist = max_dist.max(distance(v0, v1));
@@ -301,6 +317,8 @@ impl Loader {
             depth: target_depth,
             data,
             path: path.to_path_buf(),
+            mesh_vertices,
+            mesh_indices,
         })
     }
 }

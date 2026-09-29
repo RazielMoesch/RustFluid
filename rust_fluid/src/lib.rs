@@ -1,7 +1,9 @@
-pub mod app_no_ui;
+pub mod app_no_ui_2d;
+pub mod app_no_ui_3d;
 pub mod camera;
 pub mod gpu;
 pub mod render;
 pub mod setup;
 pub mod sim;
-pub mod test_headless;
+pub mod test_headless_2d;
+pub mod test_headless_3d;

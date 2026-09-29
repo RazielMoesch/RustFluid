@@ -1,5 +1,0 @@
-gpu,backend,lattice,q,collision,precision,nx,ny,wg_x,wg_y,steps,runtime,mlups,steps_per_second,bytes_per_population,bytes_per_lup,effective_ddf_bandwidth_gbps
-Apple M4,Metal,D2Q9,9,MRT,FP32,2560,1440,16,16,10000,32.341499,1139.84,309.20,4,72,82.07
-Apple M4,Metal,D2Q9,9,MRT,FP16 Storage / FP32 Compute,2560,1440,16,16,10000,25.743460,1431.98,388.45,2,36,51.55
-Apple M4,Metal,D2Q9,9,MRT,FP32,2560,1440,16,16,10000,52.569558,701.24,190.22,4,72,50.49
-Apple M4,Metal,D2Q9,9,MRT,FP16 Storage / FP32 Compute,2560,1440,16,16,10000,31.475954,1171.18,317.70,2,36,42.16

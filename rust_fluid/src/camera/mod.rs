@@ -76,13 +76,13 @@ impl Camera3D {
             aspect: (size.width as f32 / size.height as f32),
             fov: 45.0_f32.to_radians(),
             znear: 1e-3,
-            zfar: 1e3,
+            zfar: 1e4,
             yaw: 0.0,
             pitch: 0.0,
             distance: 5.0,
             rotation_sens: 0.005,
-            zoom_sens: 0.5,
-            pan_sens: 0.01,
+            zoom_sens: 5.0,
+            pan_sens: 0.1,
         }
     }
 

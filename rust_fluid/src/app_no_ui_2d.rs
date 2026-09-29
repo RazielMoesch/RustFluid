@@ -35,7 +35,7 @@ const RENDER_MIN_VELOCITY: f32 = 0.0;
 const RENDER_MAX_CURL: f32 = 0.0125;
 const RENDER_MIN_CURL: f32 = 0.0003;
 
-const RENDER_MODE: RenderModeChoice = RenderModeChoice::Velocity;
+const RENDER_MODE: RenderModeChoice = RenderModeChoice::Curl;
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -89,12 +89,15 @@ impl ApplicationHandler for App {
 
         let attrs = WindowAttributes::default()
             .with_title("RustFluid — LBM Simulation")
-            .with_inner_size(winit::dpi::LogicalSize::new(NX, NY));
+            .with_inner_size(winit::dpi::LogicalSize::new(NX, NY))
+        
+            ;
 
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
-                .expect("Failed to create window"),
+                .expect("Failed to create window")
+                ,
         );
 
         let gpu_start = std::time::Instant::now();

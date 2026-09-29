@@ -58,6 +58,60 @@ pub fn bg_entry(binding: u32, resource: wgpu::BindingResource) -> wgpu::BindGrou
     wgpu::BindGroupEntry { binding, resource }
 }
 
+pub fn bgl_storage_texture_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    format: wgpu::TextureFormat,
+    access: wgpu::StorageTextureAccess,
+    view_dimension: wgpu::TextureViewDimension,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::StorageTexture {
+            access,
+            format,
+            view_dimension,
+        },
+        count: None,
+    }
+}
+
+pub fn bgl_texture_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    view_dimension: wgpu::TextureViewDimension,
+    sample_type: wgpu::TextureSampleType,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture {
+            sample_type,
+            view_dimension,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+pub fn bgl_sampler_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    filtering: bool,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Sampler(if filtering {
+            wgpu::SamplerBindingType::Filtering
+        } else {
+            wgpu::SamplerBindingType::NonFiltering
+        }),
+        count: None,
+    }
+}
+
 pub fn create_bind_group(
     device: &wgpu::Device,
     bgl: &wgpu::BindGroupLayout,

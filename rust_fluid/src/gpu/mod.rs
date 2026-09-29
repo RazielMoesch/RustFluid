@@ -90,21 +90,35 @@ impl GPU {
         if adapter.features().contains(wgpu::Features::SHADER_F16) {
             required |= wgpu::Features::SHADER_F16;
         }
+        if adapter.features().contains(wgpu::Features::FLOAT32_FILTERABLE) {
+            required |= wgpu::Features::FLOAT32_FILTERABLE;
+        }
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("GPU"),
                 required_features: required,
-                required_limits: wgpu::Limits::default(),
+                required_limits: adapter.limits(),
                 ..Default::default()
             })
             .await
             .expect("Failed to Get Device & Queue");
 
+        
+
         let config = surface
             .get_default_config(&adapter, size.width, size.height)
+
             .expect("Failed to Get Configuration");
-        surface.configure(&device, &config);
+        
+        let cfg = wgpu::SurfaceConfiguration {
+            present_mode: wgpu::PresentMode::Immediate,
+            ..config
+        };
+        
+        surface.configure(&device, &cfg);
+
+        
 
         Self {
             instance,
@@ -112,7 +126,7 @@ impl GPU {
             adapter,
             device: Arc::new(device),
             queue: Arc::new(queue),
-            config,
+            config: cfg,
         }
     }
 
@@ -142,6 +156,7 @@ impl HeadlessGPU {
         let instance = wgpu::Instance::default();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
                 ..Default::default()
@@ -149,7 +164,7 @@ impl HeadlessGPU {
             .await
             .expect("Failed to find adapter for headless GPU");
 
-        let mut required = wgpu::Features::empty();
+        let mut required = wgpu::Features::VERTEX_WRITABLE_STORAGE;
         if adapter.features().contains(wgpu::Features::SHADER_F16) {
             required |= wgpu::Features::SHADER_F16;
         }
@@ -158,7 +173,7 @@ impl HeadlessGPU {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Headless GPU"),
                 required_features: required,
-                required_limits: wgpu::Limits::default(),
+                required_limits: adapter.limits(),
                 ..Default::default()
             })
             .await
