@@ -12,7 +12,8 @@ use crate::sim::lattices::{D2Q9, Lattice2D};
 use crate::sim::lbm::LBM2D;
 
 const RE: f32 = 150.0;
-const STEPS_PER_FRAME: u32 = 100;
+const STEPS_PER_FRAME: u32 = 2; // Number of LBM steps to execute per rendered frame
+const EXTRACT_INTERVAL: u32 = 50; // Only extract macro_data every N simulation steps
 
 // Lattice resolution (defines the grid size)
 const NX: u32 = 1920;
@@ -338,9 +339,12 @@ impl ApplicationHandler for App {
                 // update camera uniform buffer
                 state.renderer.update_camera(queue, state.camera.matrix());
 
-                // compute: step + extract
+                // compute: step
                 state.lbm.step_multiple(&mut encoder, STEPS_PER_FRAME);
-                state.lbm.extract(&mut encoder);
+                
+                if state.lbm.step_count % EXTRACT_INTERVAL == 0 || state.lbm.step_count <= STEPS_PER_FRAME {
+                    state.lbm.extract(&mut encoder);
+                }
 
                 // render pass
                 {

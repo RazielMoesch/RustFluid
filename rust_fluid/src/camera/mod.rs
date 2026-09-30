@@ -74,7 +74,7 @@ impl Camera3D {
             target: Vec3::new(0.0, 0.0, 0.0),
             up: Vec3::Y,
             aspect: (size.width as f32 / size.height as f32),
-            fov: 25.0_f32.to_radians(),
+            fov: 10.0_f32.to_radians(),
             znear: 1e-3,
             zfar: 1e4,
             yaw: 0.0,

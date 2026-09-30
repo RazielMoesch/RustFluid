@@ -9,11 +9,12 @@ use crate::render::{Render3D, RenderMode3D};
 use crate::sim::lattices::{CollisionLogic, D3Q19, Lattice3D, Precision};
 use crate::sim::lbm::LBM3D;
 
-const STEPS_PER_FRAME: u32 = 100; // Increased to let flow develop faster
+const STEPS_PER_FRAME: u32 = 2; // Number of LBM steps to execute per rendered frame
+const EXTRACT_INTERVAL: u32 = 50; // Only extract macro_data and trace streamlines every N simulation steps
 
 // Lattice resolution (defines the grid size)
-const NX: u32 = 768 / 2;
-const NY: u32 = 192 / 3;
+const NX: u32 = 384;
+const NY: u32 = 64;
 const NZ: u32 = 64;
 
 const WGS_X: u32 = 32;
@@ -88,8 +89,8 @@ impl ApplicationHandler for App {
         let device = &gpu.device;
         let queue = &gpu.queue;
 
-        let reynolds: f32 = 20.0;
-        let d = 64.0;
+        let reynolds: f32 = 100.0;
+        let d = 16.0;
         let u_design = 0.577;
 
         // 3D Domain Setup: Wind Tunnel
@@ -158,10 +159,10 @@ impl ApplicationHandler for App {
         } 
         
         if stl_vertices.is_empty() {
-            // Replicate FluidX3D setup (Cylinder)
-            let cx = 128; // Move to the left side so wake flows to the right
-            let cy = 96;  // middle of the 192-cell height
-            let r = 32;   // D = 64
+            // Fallback: Generate a cylinder fitted to the new domain
+            let cx = (NX / 4) as i32; // Move to the left side so wake flows to the right
+            let cy = (NY / 2) as i32; // middle of the Y height
+            let r = 12;               // D = 24
             let r2 = r*r;
 
             for z in 0..NZ {
@@ -284,9 +285,14 @@ impl ApplicationHandler for App {
             gpu.config.format,
             wgpu::TextureFormat::Depth32Float,
             NX, NY, NZ,
-            [50.0, NY as f32 * 0.4, NZ as f32 * 0.25], // seed_bounds_min
-            [50.0, NY as f32 * 0.55, NZ as f32 * 0.75], // seed_bounds_max
-            [1, 5, 10], // grid_size [X, Y, Z]
+            // --- F-35 Bounds ---
+            // [50.0, NY as f32 * 0.4, NZ as f32 * 0.25], // seed_bounds_min
+            // [50.0, NY as f32 * 0.55, NZ as f32 * 0.75], // seed_bounds_max
+            // [1, 10, 10], // grid_size [X, Y, Z]
+            // --- Sphere/Cylinder Bounds (Commented out) ---
+            [50.0, NY as f32 * 0.25, NZ as f32 * 0.25], // seed_bounds_min
+            [50.0, NY as f32 * 0.75, NZ as f32 * 0.75], // seed_bounds_max
+            [1, 10, 10], // grid_size [X, Y, Z]
             256, // 256 points max
             &renderer.colormap_view,
             &renderer.sampler,
@@ -436,81 +442,7 @@ impl ApplicationHandler for App {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                // DIAGNOSTIC BLOCK: run every frame to catch blowup
-                if state.lbm.step_count > 0 {
-                    let nx = NX;
-                    let ny = NY;
-                    let nz = NZ;
-                    let size_macro = (nx * ny * nz * 16) as wgpu::BufferAddress;
-                    let size_flags = (nx * ny * nz * 4) as wgpu::BufferAddress;
-                    
-                    let staging_buffer_macro = state.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("Staging Macro"),
-                        size: size_macro,
-                        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                    let staging_buffer_flags = state.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("Staging Flags"),
-                        size: size_flags,
-                        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
 
-                    let mut encoder = state.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-                    encoder.copy_buffer_to_buffer(&state.lbm.buffers.macro_data, 0, &staging_buffer_macro, 0, size_macro);
-                    encoder.copy_buffer_to_buffer(&state.lbm.buffers.flags, 0, &staging_buffer_flags, 0, size_flags);
-                    state.gpu.queue.submit(Some(encoder.finish()));
-
-                    let slice_macro = staging_buffer_macro.slice(..);
-                    let slice_flags = staging_buffer_flags.slice(..);
-                    
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    slice_macro.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
-                    state.gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-                    rx.recv().unwrap().unwrap();
-
-                    let (tx2, rx2) = std::sync::mpsc::channel();
-                    slice_flags.map_async(wgpu::MapMode::Read, move |v| tx2.send(v).unwrap());
-                    state.gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-                    rx2.recv().unwrap().unwrap();
-
-                    let data_macro = slice_macro.get_mapped_range().unwrap();
-                    let data_flags = slice_flags.get_mapped_range().unwrap();
-                    
-                    let macro_data: &[[f32; 4]] = bytemuck::cast_slice(&data_macro);
-                    let flags_data: &[u32] = bytemuck::cast_slice(&data_flags);
-
-                    let mut blowup_found = false;
-                    for z in 0..nz {
-                        for y in 0..ny {
-                            for x in 0..nx {
-                                let idx = (x + y * nx + z * nx * ny) as usize;
-                                let m = macro_data[idx];
-                                let f = flags_data[idx];
-                                let rho = m[3];
-                                let u_sq = m[0]*m[0] + m[1]*m[1] + m[2]*m[2];
-                                let is_solid = (f >> 24) == 1; // 1 is BOUNCE_BACK
-
-                                if rho <= 0.0 || rho.is_nan() || u_sq > 4.0 || u_sq.is_nan() {
-                                    println!("BLOWUP DETECTED at Step {}", state.lbm.step_count);
-                                    println!("Cell ({}, {}, {}): rho={:.6}, u=[{:.6}, {:.6}, {:.6}]", x, y, z, rho, m[0], m[1], m[2]);
-                                    println!("Touches solid: {}", is_solid);
-                                    blowup_found = true;
-                                    break;
-                                }
-                            }
-                            if blowup_found { break; }
-                        }
-                        if blowup_found { break; }
-                    }
-                    if blowup_found {
-                        panic!("Simulation stopped due to invalid state.");
-                    }
-                    // Q-criterion diagnostic disabled to speed up the blowup check
-
-
-                }
 
 
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -523,15 +455,16 @@ impl ApplicationHandler for App {
                 state.renderer.update_camera(queue, inv_view_proj, view_proj, state.camera.eye, state.max_speed, state.iso_q, state.render_mode as u32);
 
                 if !state.paused {
-                    // compute: step + extract + vorticity
+                    // compute: step
                     state.lbm.step_multiple(&mut encoder, STEPS_PER_FRAME);
-                    state.lbm.extract(&mut encoder);
                     
-                    if state.render_mode == crate::render::RenderMode3D::QCriterion {
-                        state.renderer.compute_vorticity(&mut encoder);
-                    } else if state.render_mode == crate::render::RenderMode3D::FlowStreams {
-                        // Trace streamlines every 10 steps to save compute, or on first frame
-                        if state.lbm.step_count % 10 == 0 || state.lbm.step_count == 1 {
+                    // Only extract and trace streamlines periodically to save compute
+                    if state.lbm.step_count % EXTRACT_INTERVAL == 0 || state.lbm.step_count <= STEPS_PER_FRAME {
+                        state.lbm.extract(&mut encoder);
+                        
+                        if state.render_mode == crate::render::RenderMode3D::QCriterion {
+                            state.renderer.compute_vorticity(&mut encoder);
+                        } else if state.render_mode == crate::render::RenderMode3D::FlowStreams {
                             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                                 label: Some("Streamline Tracing Pass"),
                                 timestamp_writes: None,

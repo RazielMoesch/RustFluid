@@ -9,7 +9,8 @@ use crate::render::{Render3D, RenderMode3D};
 use crate::sim::lattices::{CollisionLogic, D3Q19, Lattice3D, Precision};
 use crate::sim::lbm::LBM3D;
 
-const STEPS_PER_FRAME: u32 = 1; // Increased to let flow develop faster
+const STEPS_PER_FRAME: u32 = 2; // Number of LBM steps to execute per rendered frame
+const EXTRACT_INTERVAL: u32 = 50; // Only extract macro_data every N simulation steps
 
 // Lattice resolution (defines the grid size)
 const NX: u32 = 768;
@@ -527,19 +528,22 @@ impl ApplicationHandler for App {
                 state.renderer.update_camera(queue, inv_view_proj, view_proj, state.camera.eye, state.max_speed, state.iso_q, state.render_mode as u32);
 
                 if !state.paused {
-                    // compute: step + extract + vorticity
+                    // compute: step
                     state.lbm.step_multiple(&mut encoder, STEPS_PER_FRAME);
-                    state.lbm.extract(&mut encoder);
                     
-                    if state.render_mode == crate::render::RenderMode3D::QCriterion {
-                        state.renderer.compute_vorticity(&mut encoder);
-                    } else if state.render_mode == crate::render::RenderMode3D::FlowStreams {
-                        // We need a compute pass to advect the particles
-                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("Particle Advection Pass"),
-                            timestamp_writes: None,
-                        });
-                        state.particle_renderer.advect(&mut pass);
+                    if state.lbm.step_count % EXTRACT_INTERVAL == 0 || state.lbm.step_count <= STEPS_PER_FRAME {
+                        state.lbm.extract(&mut encoder);
+                        
+                        if state.render_mode == crate::render::RenderMode3D::QCriterion {
+                            state.renderer.compute_vorticity(&mut encoder);
+                        } else if state.render_mode == crate::render::RenderMode3D::FlowStreams {
+                            // We need a compute pass to advect the particles
+                            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                label: Some("Particle Advection Pass"),
+                                timestamp_writes: None,
+                            });
+                            state.particle_renderer.advect(&mut pass);
+                        }
                     }
                 }
 
