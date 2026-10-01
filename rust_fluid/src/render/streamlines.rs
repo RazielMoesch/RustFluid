@@ -27,6 +27,7 @@ impl StreamlineRenderer {
         seed_bounds_max: [f32; 3],
         grid_size: [u32; 3],
         max_points: u32,
+        thickness: f32,
         colormap_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) -> Self {
@@ -115,6 +116,7 @@ impl StreamlineRenderer {
                 ("101", ny as f64),
                 ("102", nz as f64),
                 ("103", max_points as f64),
+                ("104", thickness as f64),
             ],
             ..Default::default()
         };
@@ -231,6 +233,7 @@ const STREAMLINE_COMPUTE: &str = r#"
 @id(101) override NY: f32 = 96.0;
 @id(102) override NZ: f32 = 32.0;
 @id(103) override MAX_POINTS: u32 = 256u;
+@id(104) override THICKNESS: f32 = 0.1;
 
 @group(0) @binding(0) var<storage, read> macro_data: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> flags: array<u32>;
@@ -340,6 +343,7 @@ const STREAMLINE_RENDER: &str = r#"
 @id(101) override NY: f32 = 96.0;
 @id(102) override NZ: f32 = 32.0;
 @id(103) override MAX_POINTS: u32 = 256u;
+@id(104) override THICKNESS: f32 = 0.1;
 
 struct Uniforms {
     inv_view_proj: mat4x4<f32>,
@@ -405,7 +409,7 @@ fn vs(@builtin(vertex_index) v_idx: u32, @builtin(instance_index) i_idx: u32) ->
         normal = normalize(normal);
     }
     
-    let thickness = 0.1; // Thickness in world units (voxels)
+    let thickness = THICKNESS; // Thickness in world units (voxels)
     let sign = select(-1.0, 1.0, is_pos_offset);
     let world_pos = p + normal * (thickness * sign);
     

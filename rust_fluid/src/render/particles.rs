@@ -26,6 +26,7 @@ impl ParticleRenderer {
         ny: u32,
         nz: u32,
         num_particles: u32,
+        thickness: f32,
         colormap_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) -> Self {
@@ -109,6 +110,7 @@ impl ParticleRenderer {
                 ("100", nx as f64),
                 ("101", ny as f64),
                 ("102", nz as f64),
+                ("103", thickness as f64),
             ],
             ..Default::default()
         };
@@ -218,7 +220,7 @@ impl ParticleRenderer {
                 compilation_options: comp_opts,
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
             depth_stencil: None,
@@ -248,8 +250,8 @@ impl ParticleRenderer {
         pass.set_pipeline(&self.render_pipeline);
         pass.set_bind_group(0, &self.bind_group_render, &[]);
         pass.set_vertex_buffer(0, self.particle_buffer.slice(..));
-        // Draw 2 vertices (a line) for every instance (particle)
-        pass.draw(0..2, 0..self.num_particles);
+        // Draw 6 vertices (a quad) for every instance (particle)
+        pass.draw(0..6, 0..self.num_particles);
     }
 }
 
@@ -257,6 +259,7 @@ const PARTICLE_COMPUTE: &str = r#"
 @id(100) override NX: f32 = 384.0;
 @id(101) override NY: f32 = 96.0;
 @id(102) override NZ: f32 = 32.0;
+@id(103) override THICKNESS: f32 = 0.05;
 
 struct Particle {
     pos_speed: vec4<f32>,
@@ -305,7 +308,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let v = sample_velocity(pos);
     
     // Advect particle
-    let dt = 15.0; // Advection speed multiplier
+    let dt = 2.5; // Slower advection speed to prevent strobing/wagon-wheel effect
     pos += v * dt;
     let speed = length(v);
     
@@ -318,8 +321,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let r1 = hash(i * 13u + u32(abs(pos.x) * 1000.0));
         let r2 = hash(i * 17u + u32(abs(pos.y) * 1000.0));
         let r3 = hash(i * 19u + u32(abs(pos.z) * 1000.0));
-        // Spawn near the inlet
-        pos = vec3<f32>(r3 * 10.0 + 1.0, r1 * f32(NY), r2 * f32(NZ));
+        // Spawn safely inside the bounds to prevent getting stuck
+        pos = vec3<f32>(r3 * 10.0 + 2.0, r1 * (f32(NY) - 4.0) + 2.0, r2 * (f32(NZ) - 4.0) + 2.0);
     }
     
     particles[i].pos_speed = vec4<f32>(pos, speed);
@@ -330,6 +333,7 @@ const PARTICLE_RENDER: &str = r#"
 @id(100) override NX: f32 = 384.0;
 @id(101) override NY: f32 = 96.0;
 @id(102) override NZ: f32 = 32.0;
+@id(103) override THICKNESS: f32 = 0.05;
 
 struct Uniforms {
     inv_view_proj: mat4x4<f32>,
@@ -349,6 +353,7 @@ struct Uniforms {
 struct VOut {
     @builtin(position) position: vec4<f32>,
     @location(0) speed: f32,
+    @location(1) tail_fade: f32,
 }
 
 fn sample_velocity(p: vec3<f32>) -> vec3<f32> {
@@ -362,17 +367,35 @@ fn sample_velocity(p: vec3<f32>) -> vec3<f32> {
 @vertex
 fn vs(@builtin(vertex_index) v_idx: u32, @location(0) pos_speed: vec4<f32>) -> VOut {
     var out: VOut;
-    var world_pos = pos_speed.xyz;
     let speed = pos_speed.w;
+    let p0 = pos_speed.xyz;
+    let v = sample_velocity(p0);
     
-    if (v_idx % 2u == 1u) {
-        // Draw the tail of the stream line
-        let v = sample_velocity(world_pos);
-        world_pos -= v * 200.0; // Trail length
-    }
+    // Tail length matches the advection scaling
+    let tail_vec = normalize(v) * (speed * 25.0 + 2.0);
+    let p1 = p0 - tail_vec;
+    
+    // Create a camera-facing quad
+    let view_dir = normalize(uniforms.eye.xyz - p0);
+    var dir = tail_vec;
+    if (length(dir) < 0.001) { dir = vec3<f32>(1.0, 0.0, 0.0); }
+    var normal = cross(normalize(dir), view_dir);
+    if (length(normal) < 0.001) { normal = vec3<f32>(0.0, 1.0, 0.0); }
+    normal = normalize(normal);
+    
+    // Quad vertices (TriangleList):
+    // 0: p0 + w, 1: p1 - w, 2: p0 - w, 3: p0 + w, 4: p1 + w, 5: p1 - w
+    let is_p1 = (v_idx == 1u || v_idx == 4u || v_idx == 5u);
+    let is_pos = (v_idx == 0u || v_idx == 3u || v_idx == 4u);
+    let sign = select(-1.0, 1.0, is_pos);
+    
+    let p = select(p0, p1, is_p1);
+    let fade = select(1.0, 0.0, is_p1);
+    let world_pos = p + normal * (THICKNESS * sign);
     
     out.position = uniforms.view_proj * vec4<f32>(world_pos, 1.0);
     out.speed = speed;
+    out.tail_fade = fade;
     return out;
 }
 
@@ -381,10 +404,10 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let normalized = clamp(in.speed / uniforms.max_speed, 0.0, 1.0);
     let sample = textureSampleLevel(colormap, samp, normalized, 0.0);
     let color = sample.rgb;
-    let alpha = sample.a;
     
-    // Since we now scatter the particles across the domain, they won't clump and blow out.
-    // We can use a high alpha so individual stream lines are visible!
+    // Fade the tail to 0 to clearly show flow direction
+    let alpha = sample.a * in.tail_fade;
+    
     return vec4<f32>(color, alpha);
 }
 "#;

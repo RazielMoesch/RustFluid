@@ -16,9 +16,9 @@ impl GpuCapabilities {
 
     pub fn validate_precision(
         &self,
-        precision: crate::sim::lattices::Precision,
+        precision: crate::sim::common::precision::Precision,
     ) -> Result<(), String> {
-        use crate::sim::lattices::Precision;
+        use crate::sim::common::precision::Precision;
         match precision {
             Precision::F32 => Ok(()),
             Precision::FP16S => {
@@ -34,9 +34,9 @@ impl GpuCapabilities {
 
     pub fn resolve_precision(
         &self,
-        precision: crate::sim::lattices::Precision,
-    ) -> Result<crate::sim::lattices::Precision, String> {
-        use crate::sim::lattices::Precision;
+        precision: crate::sim::common::precision::Precision,
+    ) -> Result<crate::sim::common::precision::Precision, String> {
+        use crate::sim::common::precision::Precision;
         match precision {
             Precision::Auto => {
                 if self.shader_f16 {

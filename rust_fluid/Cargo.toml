@@ -2,7 +2,6 @@
 name = "rust_fluid"
 version = "0.1.0"
 edition = "2024"
-default-run = "rust_fluid"
 
 [dependencies]
 bytemuck = {version = "1.25.2", features = ["derive"]}

@@ -25,6 +25,33 @@ fn get_u(x: i32, y: i32, z: i32, is_valid: ptr<function, bool>) -> vec3<f32> {
     return macro_data[idx].xyz;
 }
 
+fn get_u_smooth(x: i32, y: i32, z: i32, is_valid: ptr<function, bool>) -> vec3<f32> {
+    var valid_c = true;
+    let u_c = get_u(x, y, z, &valid_c);
+    if (!valid_c) {
+        *is_valid = false;
+        return vec3<f32>(0.0);
+    }
+    
+    var u_sum = vec3<f32>(0.0);
+    var n = 0.0;
+    
+    var v = true;
+    let u1 = get_u(x + 1, y, z, &v); if (v) { u_sum += u1; n += 1.0; }
+    let u2 = get_u(x - 1, y, z, &v); if (v) { u_sum += u2; n += 1.0; }
+    let u3 = get_u(x, y + 1, z, &v); if (v) { u_sum += u3; n += 1.0; }
+    let u4 = get_u(x, y - 1, z, &v); if (v) { u_sum += u4; n += 1.0; }
+    let u5 = get_u(x, y, z + 1, &v); if (v) { u_sum += u5; n += 1.0; }
+    let u6 = get_u(x, y, z - 1, &v); if (v) { u_sum += u6; n += 1.0; }
+    
+    *is_valid = true;
+    if (n > 0.0) {
+        let alpha = 0.25; // 25% smoothing
+        return u_c * (1.0 - alpha) + (u_sum / n) * alpha;
+    }
+    return u_c;
+}
+
 @compute @workgroup_size(8, 8, 2)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = global_id.x;
@@ -49,31 +76,46 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     var valid = true;
-    let u_c = get_u(xi, yi, zi, &valid);
-    let u_r = get_u(xi + 1, yi, zi, &valid);
-    let u_l = get_u(xi - 1, yi, zi, &valid);
-    let u_t = get_u(xi, yi + 1, zi, &valid);
-    let u_b = get_u(xi, yi - 1, zi, &valid);
-    let u_f = get_u(xi, yi, zi + 1, &valid);
-    let u_k = get_u(xi, yi, zi - 1, &valid);
-
+    let u_c = get_u_smooth(xi, yi, zi, &valid);
+    
     if (!valid) {
         textureStore(volume, vec3<i32>(xi, yi, zi), vec4<f32>(0.0, 0.0, length(u_c), 0.0));
         return;
     }
 
-    // Central differences
-    let ux_x = (u_r.x - u_l.x) * 0.5;
-    let ux_y = (u_t.x - u_b.x) * 0.5;
-    let ux_z = (u_f.x - u_k.x) * 0.5;
+    var vr = true; let u_r = get_u_smooth(xi + 1, yi, zi, &vr);
+    var vl = true; let u_l = get_u_smooth(xi - 1, yi, zi, &vl);
+    var vt = true; let u_t = get_u_smooth(xi, yi + 1, zi, &vt);
+    var vb = true; let u_b = get_u_smooth(xi, yi - 1, zi, &vb);
+    var vf = true; let u_f = get_u_smooth(xi, yi, zi + 1, &vf);
+    var vk = true; let u_k = get_u_smooth(xi, yi, zi - 1, &vk);
 
-    let uy_x = (u_r.y - u_l.y) * 0.5;
-    let uy_y = (u_t.y - u_b.y) * 0.5;
-    let uy_z = (u_f.y - u_k.y) * 0.5;
+    var ux_x = 0.0; var uy_x = 0.0; var uz_x = 0.0;
+    if (vr && vl) {
+        ux_x = (u_r.x - u_l.x) * 0.5; uy_x = (u_r.y - u_l.y) * 0.5; uz_x = (u_r.z - u_l.z) * 0.5;
+    } else if (vr) {
+        ux_x = u_r.x - u_c.x; uy_x = u_r.y - u_c.y; uz_x = u_r.z - u_c.z;
+    } else if (vl) {
+        ux_x = u_c.x - u_l.x; uy_x = u_c.y - u_l.y; uz_x = u_c.z - u_l.z;
+    }
 
-    let uz_x = (u_r.z - u_l.z) * 0.5;
-    let uz_y = (u_t.z - u_b.z) * 0.5;
-    let uz_z = (u_f.z - u_k.z) * 0.5;
+    var ux_y = 0.0; var uy_y = 0.0; var uz_y = 0.0;
+    if (vt && vb) {
+        ux_y = (u_t.x - u_b.x) * 0.5; uy_y = (u_t.y - u_b.y) * 0.5; uz_y = (u_t.z - u_b.z) * 0.5;
+    } else if (vt) {
+        ux_y = u_t.x - u_c.x; uy_y = u_t.y - u_c.y; uz_y = u_t.z - u_c.z;
+    } else if (vb) {
+        ux_y = u_c.x - u_b.x; uy_y = u_c.y - u_b.y; uz_y = u_c.z - u_b.z;
+    }
+
+    var ux_z = 0.0; var uy_z = 0.0; var uz_z = 0.0;
+    if (vf && vk) {
+        ux_z = (u_f.x - u_k.x) * 0.5; uy_z = (u_f.y - u_k.y) * 0.5; uz_z = (u_f.z - u_k.z) * 0.5;
+    } else if (vf) {
+        ux_z = u_f.x - u_c.x; uy_z = u_f.y - u_c.y; uz_z = u_f.z - u_c.z;
+    } else if (vk) {
+        ux_z = u_c.x - u_k.x; uy_z = u_c.y - u_k.y; uz_z = u_c.z - u_k.z;
+    }
 
     let s_xx = ux_x;
     let s_yy = uy_y;
@@ -166,9 +208,10 @@ fn sample_volume(p: vec3<f32>) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     
-    // Manual trilinear interpolation using textureLoad
-    let p0 = vec3<i32>(uvw);
-    let f = fract(uvw);
+    // Correct half-voxel offset for textureLoad interpolation
+    let p_shifted = uvw - vec3<f32>(0.5);
+    let p0 = vec3<i32>(floor(p_shifted));
+    let f = fract(p_shifted);
     
     let v000 = textureLoad(volume_tex, p0 + vec3<i32>(0, 0, 0), 0);
     let v100 = textureLoad(volume_tex, p0 + vec3<i32>(1, 0, 0), 0);
@@ -179,24 +222,31 @@ fn sample_volume(p: vec3<f32>) -> vec4<f32> {
     let v011 = textureLoad(volume_tex, p0 + vec3<i32>(0, 1, 1), 0);
     let v111 = textureLoad(volume_tex, p0 + vec3<i32>(1, 1, 1), 0);
     
-    if (v000.a < 0.5 || v100.a < 0.5 || v010.a < 0.5 || v110.a < 0.5 ||
-        v001.a < 0.5 || v101.a < 0.5 || v011.a < 0.5 || v111.a < 0.5) {
+    let w000 = (1.0 - f.x) * (1.0 - f.y) * (1.0 - f.z) * v000.a;
+    let w100 = f.x * (1.0 - f.y) * (1.0 - f.z) * v100.a;
+    let w010 = (1.0 - f.x) * f.y * (1.0 - f.z) * v010.a;
+    let w110 = f.x * f.y * (1.0 - f.z) * v110.a;
+    let w001 = (1.0 - f.x) * (1.0 - f.y) * f.z * v001.a;
+    let w101 = f.x * (1.0 - f.y) * f.z * v101.a;
+    let w011 = (1.0 - f.x) * f.y * f.z * v011.a;
+    let w111 = f.x * f.y * f.z * v111.a;
+
+    let sum_w = w000 + w100 + w010 + w110 + w001 + w101 + w011 + w111;
+    
+    if (sum_w < 1e-4) {
         return vec4<f32>(0.0);
     }
     
-    let v00 = mix(v000, v100, f.x);
-    let v10 = mix(v010, v110, f.x);
-    let v01 = mix(v001, v101, f.x);
-    let v11 = mix(v011, v111, f.x);
+    let val = (
+        v000 * w000 + v100 * w100 + v010 * w010 + v110 * w110 +
+        v001 * w001 + v101 * w101 + v011 * w011 + v111 * w111
+    ) / sum_w;
     
-    let v0 = mix(v00, v10, f.y);
-    let v1 = mix(v01, v11, f.y);
-    
-    return mix(v0, v1, f.z);
+    return vec4<f32>(val.rgb, 1.0);
 }
 
 fn get_gradient_q(p: vec3<f32>) -> vec3<f32> {
-    let h = 1.0;
+    let h = 1.0; // Must be >= 1.0 to smooth over trilinear cell boundary derivative discontinuities
     let dx = vec3<f32>(h, 0.0, 0.0);
     let dy = vec3<f32>(0.0, h, 0.0);
     let dz = vec3<f32>(0.0, 0.0, h);
@@ -206,7 +256,11 @@ fn get_gradient_q(p: vec3<f32>) -> vec3<f32> {
         sample_volume(p + dy).r - sample_volume(p - dy).r,
         sample_volume(p + dz).r - sample_volume(p - dz).r
     );
-    return normalize(grad + vec3<f32>(0.0001));
+    let l2 = dot(grad, grad);
+    if (l2 < 1e-12) {
+        return vec3<f32>(0.0, 1.0, 0.0);
+    }
+    return normalize(grad);
 }
 
 fn get_obstacle_normal(p: vec3<f32>) -> vec3<f32> {
@@ -366,7 +420,13 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         }
     } else {
         // Isosurface Mode
-        for (var i = 0; i < 2000; i++) {
+        let dt_iso = 0.25; // Smaller step size to catch thin vortex sheets
+        var t_curr = tN; // No jitter for deterministic solid surface
+        var last_q = 0.0;
+        var last_t = t_curr;
+        var started = false;
+
+        for (var i = 0; i < 4000; i++) {
         if (t_curr > tF) { break; }
         let p_curr = ro + rd * t_curr;
         let tex_val = sample_volume(p_curr);
@@ -379,8 +439,19 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         if (valid > 0.5) {
             if (q_val >= uniforms.iso_q) {
                 if (started && last_q < uniforms.iso_q) {
-                    let frac = (uniforms.iso_q - last_q) / (q_val - last_q);
-                    let hit_t = last_t + frac * (t_curr - last_t);
+                    // Bisection refinement for sub-voxel precision
+                    var lo = last_t;
+                    var hi = t_curr;
+                    for (var j = 0; j < 5; j++) {
+                        let mid = 0.5 * (lo + hi);
+                        let q_mid = sample_volume(ro + rd * mid).r;
+                        if (q_mid >= uniforms.iso_q) {
+                            hi = mid;
+                        } else {
+                            lo = mid;
+                        }
+                    }
+                    let hit_t = 0.5 * (lo + hi);
                     
                     let hit_p = ro + rd * hit_t;
                     let hit_speed = sample_volume(hit_p).b;
@@ -391,11 +462,11 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
                     let normalized_speed = clamp(hit_speed / uniforms.max_speed, 0.0, 1.0);
                     let base_color = textureSampleLevel(colormap_tex, samp, normalized_speed, 0.0).rgb;
                     
-                    let diff = max(dot(normal, light_dir), 0.0) * 0.7 + 0.3;
+                    let diff = max(dot(normal, light_dir), 0.0) * 0.8 + 0.2;
                     let half_vec = normalize(light_dir + view_dir);
-                    let spec = pow(max(dot(normal, half_vec), 0.0), 32.0) * 0.5;
+                    let spec = pow(max(dot(normal, half_vec), 0.0), 16.0) * 0.15; // Soft specular, not white blown out
                     
-                    let emission = base_color * pow(normalized_speed, 2.0) * 1.5;
+                    let emission = base_color * normalized_speed * 0.2; // Tiny emission so we can see inside dark areas
                     let final_color = base_color * diff + vec3<f32>(spec) + emission;
                     
                     acc_color = final_color;
@@ -410,7 +481,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             started = false;
         }
         
-        t_curr += dt;
+        t_curr += dt_iso;
     }
     }
 

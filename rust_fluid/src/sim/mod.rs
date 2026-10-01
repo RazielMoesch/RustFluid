@@ -1,5 +1,3 @@
-pub mod benchmark;
-pub mod buffers;
-pub mod lattices;
-pub mod lbm;
-pub mod validation;
+pub mod common;
+pub mod d2;
+pub mod d3;

@@ -3,6 +3,8 @@ pub mod components_3d;
 pub mod mesh;
 pub mod particles;
 pub mod streamlines;
+pub mod default_3d;
+pub mod qcriterion;
 
 use crate::gpu::utils::{
     bg_entry, bgl_sampler_entry, bgl_storage_entry, bgl_storage_texture_entry, bgl_texture_entry,
@@ -517,4 +519,6 @@ impl Render3D {
         });
     }
 }
+
+pub use default_3d::DefaultRenderer3D;
 

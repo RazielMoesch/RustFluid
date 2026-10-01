@@ -284,8 +284,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let diff = max(dot(normal, light_dir), 0.0);
     let spec = pow(max(dot(normal, half_vec), 0.0), 32.0);
     
-    // Nice metallic dark look for obstacles
-    let obj_color = vec3<f32>(0.6, 0.65, 0.7) * (diff + 0.2) + vec3<f32>(1.0, 1.0, 1.0) * spec * 0.8;
+    // Nice metallic bright look for obstacles so it feels fully solid/opaque
+    let obj_color = vec3<f32>(0.8, 0.85, 0.9) * (diff + 0.4) + vec3<f32>(1.0, 1.0, 1.0) * spec * 0.8;
     
     return vec4<f32>(obj_color, 1.0);
 }
