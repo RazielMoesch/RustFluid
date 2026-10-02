@@ -1,14 +1,17 @@
+//! Periodic Taylor-Green vortex decay and symmetry validation.
+
 use crate::diagnostics::metrics::MacroMetrics;
 use crate::diagnostics::result::DiagnosticResult;
 use crate::runtime::context::HeadlessContext;
 use crate::sim::common::precision::Precision;
-use crate::sim::d3::boundary::fluid::Fluid;
 use crate::sim::d3::boundary::Boundary3D;
+use crate::sim::d3::boundary::fluid::Fluid;
 use crate::sim::d3::collision::bgk::Bgk;
-use crate::sim::d3::config::{SimulationConfig3D, InitType};
+use crate::sim::d3::config::{InitType, SimulationConfig3D};
 use crate::sim::d3::lattice::d3q19::D3Q19;
 use crate::sim::d3::solver::Lbm3D;
 
+/// Evolves a Taylor-Green field and compares its decay with expectation.
 pub fn run_taylor_green(
     ctx: &HeadlessContext,
     precision: Precision,
@@ -38,14 +41,26 @@ pub fn run_taylor_green(
         force_y: 0.0,
         force_z: 0.0,
         periodic_x: true, // Need true periodicity for TG
+        periodic_y: true,
+        periodic_z: true,
         pure_fluid: false, // We'll just pass fluid flags
         num_boundary_configs: 1,
+        sponge_len: 0,
+        sponge_strength: 0.0,
+        sponge_cfg: 0,
     };
 
-    let mut lbm = Lbm3D::new(ctx.device, config, precision, &lattice, &collision, &boundaries);
+    let mut lbm = Lbm3D::new(
+        ctx.device,
+        config,
+        precision,
+        &lattice,
+        &collision,
+        &boundaries,
+    );
 
     let mut flags = vec![0u32; (nx * nx * nx) as usize];
-    
+
     let type_id = fluid.type_id();
     for i in 0..flags.len() {
         flags[i] = type_id << 24;
@@ -54,40 +69,58 @@ pub fn run_taylor_green(
     let bcs = vec![0.0f32; 4];
     lbm.write_buffers(ctx.queue, &flags, &bcs);
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("Init Encoder"),
-    });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Init Encoder"),
+        });
     lbm.init(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
 
     for _ in 0..steps {
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Step Encoder"),
-        });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Step Encoder"),
+            });
         lbm.step(&mut encoder);
         ctx.queue.submit(std::iter::once(encoder.finish()));
     }
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     lbm.extract(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
 
     let data = lbm.download_macro_data(ctx.device, ctx.queue);
     let metrics = MacroMetrics::compute(&data);
 
-    let mut result = DiagnosticResult::pass(&format!("taylor_green_{:?}_{}steps_{}^3", precision, steps, nx));
-    
+    let mut result = DiagnosticResult::pass(&format!(
+        "taylor_green_{:?}_{}steps_{}^3",
+        precision, steps, nx
+    ));
+
     if metrics.nan_count > 0 {
-        result = DiagnosticResult::fail(&result.name, &format!("NaNs detected: {}", metrics.nan_count));
+        result = DiagnosticResult::fail(
+            &result.name,
+            &format!("NaNs detected: {}", metrics.nan_count),
+        );
     }
-    
+
     if metrics.max_u > 0.15 {
-        result = DiagnosticResult::fail(&result.name, &format!("Instability: max_u = {}", metrics.max_u));
+        result = DiagnosticResult::fail(
+            &result.name,
+            &format!("Instability: max_u = {}", metrics.max_u),
+        );
     }
-    
+
     // Check if decayed
     if metrics.max_u > 0.099 && steps > 100 {
-        result = DiagnosticResult::fail(&result.name, &format!("Not decaying properly: max_u = {}", metrics.max_u));
+        result = DiagnosticResult::fail(
+            &result.name,
+            &format!("Not decaying properly: max_u = {}", metrics.max_u),
+        );
     }
 
     result

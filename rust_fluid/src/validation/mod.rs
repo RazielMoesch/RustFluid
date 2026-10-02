@@ -1,5 +1,8 @@
+//! CPU-side error, conservation, and invalid-cell analysis.
+
 use std::fmt;
 
+/// Absolute and relative error summary for one scalar field.
 pub struct FieldErrors {
     pub mean_abs: f64,
     pub rms: f64,
@@ -17,6 +20,7 @@ impl fmt::Display for FieldErrors {
     }
 }
 
+/// Error summaries for density and each velocity component.
 pub struct FullFieldComparison {
     pub rho: FieldErrors,
     pub ux: FieldErrors,
@@ -70,11 +74,7 @@ fn compute_field_errors(reference: &[f32], test: &[f32]) -> FieldErrors {
     }
 }
 
-pub fn compare_fields(
-    reference: &[f32],
-    test: &[f32],
-    total_cells: usize,
-) -> FullFieldComparison {
+pub fn compare_fields(reference: &[f32], test: &[f32], total_cells: usize) -> FullFieldComparison {
     assert!(reference.len() >= total_cells * 4);
     assert!(test.len() >= total_cells * 4);
 
@@ -102,6 +102,7 @@ pub fn compare_fields(
     }
 }
 
+/// Initial/final mass values and normalized drift.
 pub struct MassDiagnostics {
     pub initial_mass: f64,
     pub final_mass: f64,
@@ -141,6 +142,7 @@ pub fn compute_mass_diagnostics(initial_mass: f64, final_mass: f64) -> MassDiagn
     }
 }
 
+/// Location and values of a cell that failed a stability check.
 pub struct InvalidCell {
     pub cell_idx: usize,
     pub x: u32,
@@ -161,12 +163,7 @@ impl fmt::Display for InvalidCell {
     }
 }
 
-pub fn scan_stability(
-    macro_data: &[f32],
-    nx: u32,
-    ny: u32,
-    max_velocity: f32,
-) -> Vec<InvalidCell> {
+pub fn scan_stability(macro_data: &[f32], nx: u32, ny: u32, max_velocity: f32) -> Vec<InvalidCell> {
     let total_cells = (nx * ny) as usize;
     let mut invalid = Vec::new();
 

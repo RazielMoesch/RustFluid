@@ -1,5 +1,8 @@
+//! Trilinearly integrated streamlines rendered as instanced ribbons.
+
 use wgpu::util::DeviceExt;
 
+/// Compute and render resources for a seeded three-dimensional streamline set.
 pub struct StreamlineRenderer {
     pub compute_pipeline: wgpu::ComputePipeline,
     pub render_pipeline: wgpu::RenderPipeline,
@@ -10,6 +13,10 @@ pub struct StreamlineRenderer {
     pub bind_group_render: wgpu::BindGroup,
     pub num_seeds: u32,
     pub max_points: u32,
+    clip_buffer: wgpu::Buffer,
+    nx: u32,
+    ny: u32,
+    nz: u32,
 }
 
 impl StreamlineRenderer {
@@ -41,14 +48,26 @@ impl StreamlineRenderer {
         for z_idx in 0..grid_z {
             for y_idx in 0..grid_y {
                 for x_idx in 0..grid_x {
-                    let x_frac = if grid_x > 1 { x_idx as f32 / (grid_x - 1) as f32 } else { 0.5 };
-                    let y_frac = if grid_y > 1 { y_idx as f32 / (grid_y - 1) as f32 } else { 0.5 };
-                    let z_frac = if grid_z > 1 { z_idx as f32 / (grid_z - 1) as f32 } else { 0.5 };
-                    
+                    let x_frac = if grid_x > 1 {
+                        x_idx as f32 / (grid_x - 1) as f32
+                    } else {
+                        0.5
+                    };
+                    let y_frac = if grid_y > 1 {
+                        y_idx as f32 / (grid_y - 1) as f32
+                    } else {
+                        0.5
+                    };
+                    let z_frac = if grid_z > 1 {
+                        z_idx as f32 / (grid_z - 1) as f32
+                    } else {
+                        0.5
+                    };
+
                     let x = seed_bounds_min[0] + x_frac * (seed_bounds_max[0] - seed_bounds_min[0]);
                     let y = seed_bounds_min[1] + y_frac * (seed_bounds_max[1] - seed_bounds_min[1]);
                     let z = seed_bounds_min[2] + z_frac * (seed_bounds_max[2] - seed_bounds_min[2]);
-                    
+
                     seeds.push([x, y, z, 0.0]); // padding in w
                 }
             }
@@ -75,15 +94,65 @@ impl StreamlineRenderer {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let clip_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Streamline Clip Uniform"),
+            contents: bytemuck::cast_slice(&[nx as f32, 0.0, 0.0, 0.0]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
 
         let bgl_compute = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Streamline Compute BGL"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -91,11 +160,26 @@ impl StreamlineRenderer {
             label: Some("Streamline Compute BG"),
             layout: &bgl_compute,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: macro_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: flags_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: seed_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: point_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: valid_counts_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: macro_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: flags_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: seed_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: point_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: valid_counts_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -104,11 +188,12 @@ impl StreamlineRenderer {
             source: wgpu::ShaderSource::Wgsl(STREAMLINE_COMPUTE.into()),
         });
 
-        let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[Some(&bgl_compute)],
-            immediate_size: 0,
-        });
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&bgl_compute)],
+                immediate_size: 0,
+            });
 
         let comp_opts = wgpu::PipelineCompilationOptions {
             constants: &[
@@ -133,11 +218,62 @@ impl StreamlineRenderer {
         let bgl_render = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Streamline Render BGL"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D1, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
-                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::VERTEX, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::VERTEX, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D1,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -145,11 +281,30 @@ impl StreamlineRenderer {
             label: Some("Streamline Render BG"),
             layout: &bgl_render,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: camera_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(colormap_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: point_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: valid_counts_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(colormap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: point_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: valid_counts_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: clip_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -158,11 +313,12 @@ impl StreamlineRenderer {
             source: wgpu::ShaderSource::Wgsl(STREAMLINE_RENDER.into()),
         });
 
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[Some(&bgl_render)],
-            immediate_size: 0,
-        });
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&bgl_render)],
+                immediate_size: 0,
+            });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Streamline Render Pipeline"),
@@ -187,6 +343,8 @@ impl StreamlineRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
+            // Streamlines are an analysis overlay.  The shared mesh depth
+            // attachment was rejecting the entire draw on affected drivers.
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
                 depth_write_enabled: Some(false),
@@ -209,7 +367,42 @@ impl StreamlineRenderer {
             bind_group_render,
             num_seeds,
             max_points,
+            clip_buffer,
+            nx,
+            ny,
+            nz,
         }
+    }
+
+    pub fn set_visible_fraction(
+        &self,
+        queue: &wgpu::Queue,
+        fraction: f32,
+        axis: u32,
+        from_max: bool,
+    ) {
+        let fraction = fraction.clamp(0.0, 1.0);
+        let extent = match axis {
+            1 => self.ny as f32,
+            2 => self.nz as f32,
+            _ => self.nx as f32,
+        };
+        let limit = if from_max {
+            if fraction == 0.0 {
+                extent + 1.0
+            } else {
+                extent * (1.0 - fraction)
+            }
+        } else if fraction == 0.0 {
+            -1.0
+        } else {
+            extent * fraction
+        };
+        queue.write_buffer(
+            &self.clip_buffer,
+            0,
+            bytemuck::cast_slice(&[limit, axis as f32, if from_max { 1.0 } else { 0.0 }, 0.0]),
+        );
     }
 
     pub fn compute<'a>(&'a self, pass: &mut wgpu::ComputePass<'a>) {
@@ -317,14 +510,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var step = 1u; step < MAX_POINTS; step += 1u) {
         let v1 = sample_velocity_trilinear(p);
         let speed1 = length(v1);
-        if (speed1 < 0.001) { break; } // stop if too slow or NaN
+        if (!(speed1 >= 1e-6 && speed1 < 1e6)) { break; }
 
         let midpoint = p + 0.5 * dt * (v1 / speed1);
         if (is_solid(midpoint)) { break; }
 
         let v2 = sample_velocity_trilinear(midpoint);
         let speed2 = length(v2);
-        if (speed2 < 0.001) { break; }
+        if (!(speed2 >= 1e-6 && speed2 < 1e6)) { break; }
 
         let next_p = p + dt * (v2 / speed2);
         if (is_solid(next_p)) { break; }
@@ -360,10 +553,12 @@ struct Uniforms {
 @group(0) @binding(2) var samp: sampler;
 @group(0) @binding(3) var<storage, read> points: array<vec4<f32>>;
 @group(0) @binding(4) var<storage, read> valid_counts: array<u32>;
+@group(0) @binding(5) var<uniform> clip: vec4<f32>;
 
 struct VOut {
     @builtin(position) position: vec4<f32>,
     @location(0) speed: f32,
+    @location(1) world_pos: vec3<f32>,
 }
 
 @vertex
@@ -378,6 +573,7 @@ fn vs(@builtin(vertex_index) v_idx: u32, @builtin(instance_index) i_idx: u32) ->
     if (segment_idx + 1u >= valid_count || segment_idx + 1u >= MAX_POINTS) {
         out.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         out.speed = 0.0;
+        out.world_pos = vec3<f32>(0.0);
         return out;
     }
     
@@ -397,6 +593,7 @@ fn vs(@builtin(vertex_index) v_idx: u32, @builtin(instance_index) i_idx: u32) ->
     if (length(line_dir) < 0.001) {
         out.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         out.speed = 0.0;
+        out.world_pos = vec3<f32>(0.0);
         return out;
     }
     
@@ -415,11 +612,18 @@ fn vs(@builtin(vertex_index) v_idx: u32, @builtin(instance_index) i_idx: u32) ->
     
     out.position = uniforms.view_proj * vec4<f32>(world_pos, 1.0);
     out.speed = speed;
+    out.world_pos = world_pos;
     return out;
 }
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let coord = select(in.world_pos.x, select(in.world_pos.y, in.world_pos.z, clip.y > 1.5), clip.y > 0.5);
+    if (clip.z < 0.5) {
+        if (coord > clip.x) { discard; }
+    } else {
+        if (coord < clip.x) { discard; }
+    }
     let normalized = clamp(in.speed / uniforms.max_speed, 0.0, 1.0);
     let sample = textureSampleLevel(colormap, samp, normalized, 0.0);
     return vec4<f32>(sample.rgb, 1.0); // Full opacity for verification

@@ -1,5 +1,8 @@
+//! Multiple-relaxation-time collision for the D2Q9 moment basis.
+
 use super::Collision2D;
 
+/// Relaxes D2Q9 moments at individually selected rates.
 pub struct Mrt;
 
 impl Mrt {

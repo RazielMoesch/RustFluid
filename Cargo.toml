@@ -1,6 +1,5 @@
 [workspace]
 members = [
     "rust_fluid",
-    "rust_fluid_refactored"
 ]
 resolver = "2"

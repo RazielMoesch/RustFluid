@@ -1,3 +1,6 @@
+//! Base D2 WGSL with placeholders filled by `ShaderCompiler2D`.
+
+/// Even-phase collide-stream template.
 pub const BASE_STEP_EVEN_2D: &str = r#"
 @id(100) override NX: u32 = 1920;
 @id(101) override NY: u32 = 1080;
@@ -88,6 +91,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 "#;
 
+/// Odd-phase collide-stream template.
 pub const BASE_STEP_ODD_2D: &str = r#"
 @id(100) override NX: u32 = 1920;
 @id(101) override NY: u32 = 1080;
@@ -178,6 +182,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 "#;
 
+/// Population initialization template.
 pub const BASE_INIT_2D: &str = r#"
 @id(100) override NX: u32 = 1920;
 @id(101) override NY: u32 = 1080;
@@ -236,6 +241,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 "#;
 
+/// Macroscopic-field extraction template.
 pub const BASE_EXTRACT_2D: &str = r#"
 @id(100) override NX: u32 = 1920;
 @id(101) override NY: u32 = 1080;

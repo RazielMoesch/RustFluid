@@ -1,10 +1,21 @@
+//! GPU renderers for macroscopic LBM fields and domain geometry.
+
+/// Embedded 2D WGSL programs.
 pub mod components_2d;
+/// Embedded 3D volume WGSL programs.
 pub mod components_3d;
-pub mod mesh;
-pub mod particles;
-pub mod streamlines;
+/// Interactive composite 3D renderer.
 pub mod default_3d;
+/// Triangle-mesh rendering and primitive generation.
+pub mod mesh;
+/// Advected particle-flow rendering.
+pub mod particles;
+/// Q-criterion extraction and marching cubes.
 pub mod qcriterion;
+/// Compute-generated ribbon streamlines.
+pub mod streamlines;
+/// Domain and obstacle wireframe rendering.
+pub mod wireframe;
 
 use crate::gpu::utils::{
     bg_entry, bgl_sampler_entry, bgl_storage_entry, bgl_storage_texture_entry, bgl_texture_entry,
@@ -161,13 +172,13 @@ impl RenderMode3D {
 pub struct Render3D {
     pub compute_pipeline: wgpu::ComputePipeline,
     pub compute_bind_group: wgpu::BindGroup,
-    
+
     pub vorticity_texture: wgpu::Texture,
     pub vorticity_view: wgpu::TextureView,
-    
+
     pub colormap_texture: wgpu::Texture,
     pub colormap_view: wgpu::TextureView,
-    
+
     pub sampler: wgpu::Sampler,
 
     pub pipeline: wgpu::RenderPipeline,
@@ -204,8 +215,7 @@ impl Render3D {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D3,
             format: wgpu::TextureFormat::Rgba32Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING
-                 | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let vorticity_view = vorticity_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -224,7 +234,7 @@ impl Render3D {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        
+
         let mut colormap_data = [0u8; 256 * 4];
         for i in 0..256 {
             let t = i as f32 / 255.0;
@@ -251,7 +261,7 @@ impl Render3D {
             } else {
                 mix(c4, c5, (t - 0.75) * 4.0)
             };
-            
+
             // Map alpha to be fully visible always
             let a: f32 = 1.0;
 
@@ -322,11 +332,12 @@ impl Render3D {
             source: wgpu::ShaderSource::Wgsl(COMPUTE_VORTICITY_3D.into()),
         });
 
-        let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Vorticity Compute Pipeline Layout"),
-            bind_group_layouts: &[Some(&compute_bgl)],
-            immediate_size: 0,
-        });
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Vorticity Compute Pipeline Layout"),
+                bind_group_layouts: &[Some(&compute_bgl)],
+                immediate_size: 0,
+            });
 
         let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Vorticity Compute Pipeline"),
@@ -334,11 +345,7 @@ impl Render3D {
             module: &compute_shader,
             entry_point: Some("main"),
             compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &[
-                    ("100", nx as f64),
-                    ("101", ny as f64),
-                    ("102", nz as f64),
-                ],
+                constants: &[("100", nx as f64), ("101", ny as f64), ("102", nz as f64)],
                 ..Default::default()
             },
             cache: None,
@@ -362,7 +369,10 @@ impl Render3D {
                 wgpu::TextureViewDimension::D1,
                 wgpu::TextureSampleType::Float { filterable: true },
             ),
-            crate::gpu::utils::bgl_uniform_entry(3, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+            crate::gpu::utils::bgl_uniform_entry(
+                3,
+                wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ),
             bgl_texture_entry(
                 4,
                 wgpu::ShaderStages::FRAGMENT,
@@ -373,9 +383,9 @@ impl Render3D {
         let bgl = create_bgl(device, &bgl_entries);
 
         use wgpu::util::DeviceExt;
-        
+
         let initial_cam_data = vec![0.0f32; 40];
-        
+
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Uniform Buffer 3D"),
             contents: bytemuck::cast_slice(&initial_cam_data),
@@ -407,11 +417,7 @@ impl Render3D {
         });
 
         let comp_opts = wgpu::PipelineCompilationOptions {
-            constants: &[
-                ("100", nx as f64),
-                ("101", ny as f64),
-                ("102", nz as f64),
-            ],
+            constants: &[("100", nx as f64), ("101", ny as f64), ("102", nz as f64)],
             ..Default::default()
         };
 
@@ -461,7 +467,16 @@ impl Render3D {
         }
     }
 
-    pub fn update_camera(&self, queue: &wgpu::Queue, inv_view_proj: glam::Mat4, view_proj: glam::Mat4, eye: glam::Vec3, max_speed: f32, iso_q: f32, mode: u32) {
+    pub fn update_camera(
+        &self,
+        queue: &wgpu::Queue,
+        inv_view_proj: glam::Mat4,
+        view_proj: glam::Mat4,
+        eye: glam::Vec3,
+        max_speed: f32,
+        iso_q: f32,
+        mode: u32,
+    ) {
         let mut data = [0.0f32; 40];
         data[0..16].copy_from_slice(&inv_view_proj.to_cols_array());
         data[16..32].copy_from_slice(&view_proj.to_cols_array());
@@ -473,12 +488,8 @@ impl Render3D {
         data[37] = iso_q;
         data[38] = f32::from_bits(mode);
         data[39] = 0.0; // pad
-        
-        queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::cast_slice(&data),
-        );
+
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&data));
     }
 
     pub fn compute_vorticity(&self, encoder: &mut wgpu::CommandEncoder) {
@@ -510,9 +521,15 @@ impl Render3D {
             label: Some("Render3D Bind Group"),
             layout: &bgl,
             entries: &[
-                crate::gpu::utils::bg_entry(0, wgpu::BindingResource::TextureView(&self.vorticity_view)),
+                crate::gpu::utils::bg_entry(
+                    0,
+                    wgpu::BindingResource::TextureView(&self.vorticity_view),
+                ),
                 crate::gpu::utils::bg_entry(1, wgpu::BindingResource::Sampler(&sampler)),
-                crate::gpu::utils::bg_entry(2, wgpu::BindingResource::TextureView(&self.colormap_view)),
+                crate::gpu::utils::bg_entry(
+                    2,
+                    wgpu::BindingResource::TextureView(&self.colormap_view),
+                ),
                 crate::gpu::utils::bg_entry(3, self.camera_buffer.as_entire_binding()),
                 crate::gpu::utils::bg_entry(4, wgpu::BindingResource::TextureView(depth_view)),
             ],
@@ -521,4 +538,3 @@ impl Render3D {
 }
 
 pub use default_3d::DefaultRenderer3D;
-

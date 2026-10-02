@@ -1,3 +1,5 @@
+//! Verifies macroscopic extraction across both alternating-access phases.
+
 use crate::diagnostics::result::DiagnosticResult;
 use crate::runtime::context::HeadlessContext;
 use crate::sim::common::precision::Precision;
@@ -7,6 +9,7 @@ use crate::sim::d3::config::SimulationConfig3D;
 use crate::sim::d3::lattice::d3q19::D3Q19;
 use crate::sim::d3::solver::Lbm3D;
 
+/// Compares extracted fields after even and odd phase transitions.
 pub fn run_parity(ctx: &HeadlessContext, precision: Precision, nx: u32) -> DiagnosticResult {
     let lattice = D3Q19::new();
     let collision = Bgk::new();
@@ -29,42 +32,73 @@ pub fn run_parity(ctx: &HeadlessContext, precision: Precision, nx: u32) -> Diagn
         force_y: 0.0,
         force_z: 0.0,
         periodic_x: true,
+        periodic_y: true,
+        periodic_z: true,
         pure_fluid: true,
         num_boundary_configs: 1,
+        sponge_len: 0,
+        sponge_strength: 0.0,
+        sponge_cfg: 0,
     };
 
-    let mut lbm1 = Lbm3D::new(ctx.device, config.clone(), precision, &lattice, &collision, &boundaries);
-    
+    let mut lbm1 = Lbm3D::new(
+        ctx.device,
+        config.clone(),
+        precision,
+        &lattice,
+        &collision,
+        &boundaries,
+    );
+
     let flags = vec![0u32; (nx * nx * nx) as usize];
     let bcs = vec![0.0f32; 4];
     lbm1.write_buffers(ctx.queue, &flags, &bcs);
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     lbm1.init(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
 
     for _ in 0..2 {
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         lbm1.step(&mut encoder);
         ctx.queue.submit(std::iter::once(encoder.finish()));
     }
-    
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     lbm1.extract(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
     let data_1by1 = lbm1.download_macro_data(ctx.device, ctx.queue);
 
-    let mut lbm2 = Lbm3D::new(ctx.device, config, precision, &lattice, &collision, &boundaries);
+    let mut lbm2 = Lbm3D::new(
+        ctx.device,
+        config,
+        precision,
+        &lattice,
+        &collision,
+        &boundaries,
+    );
     lbm2.write_buffers(ctx.queue, &flags, &bcs);
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     lbm2.init(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     lbm2.step_multiple(&mut encoder, 2);
     ctx.queue.submit(std::iter::once(encoder.finish()));
-    
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     lbm2.extract(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
     let data_multi = lbm2.download_macro_data(ctx.device, ctx.queue);
@@ -79,7 +113,10 @@ pub fn run_parity(ctx: &HeadlessContext, precision: Precision, nx: u32) -> Diagn
     if max_diff > 1e-6 {
         DiagnosticResult::fail(
             &format!("parity_{:?}_{}^3", precision, nx),
-            &format!("Mismatch between 1x2 and 2x1 steps: max_diff = {}", max_diff)
+            &format!(
+                "Mismatch between 1x2 and 2x1 steps: max_diff = {}",
+                max_diff
+            ),
         )
     } else {
         DiagnosticResult::pass(&format!("parity_{:?}_{}^3", precision, nx))

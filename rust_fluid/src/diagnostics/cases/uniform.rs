@@ -1,3 +1,5 @@
+//! Uniform-equilibrium preservation under repeated collide-stream steps.
+
 use crate::diagnostics::metrics::MacroMetrics;
 use crate::diagnostics::result::DiagnosticResult;
 use crate::runtime::context::HeadlessContext;
@@ -9,6 +11,7 @@ use crate::sim::d3::config::SimulationConfig3D;
 use crate::sim::d3::lattice::d3q19::D3Q19;
 use crate::sim::d3::solver::Lbm3D;
 
+/// Runs the uniform-field check for one precision and cubic grid size.
 pub fn run_uniform(
     ctx: &HeadlessContext,
     precision: Precision,
@@ -37,49 +40,77 @@ pub fn run_uniform(
         force_y: 0.0,
         force_z: 0.0,
         periodic_x: true,
+        periodic_y: true,
+        periodic_z: true,
         pure_fluid: false,
         num_boundary_configs: 1,
+        sponge_len: 0,
+        sponge_strength: 0.0,
+        sponge_cfg: 0,
     };
 
-    let mut lbm = Lbm3D::new(ctx.device, config, precision, &lattice, &collision, &boundaries);
+    let mut lbm = Lbm3D::new(
+        ctx.device,
+        config,
+        precision,
+        &lattice,
+        &collision,
+        &boundaries,
+    );
 
     let flags = vec![0u32; (nx * nx * nx) as usize];
     let bcs = vec![0.0f32; 4];
     lbm.write_buffers(ctx.queue, &flags, &bcs);
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("Init Encoder"),
-    });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Init Encoder"),
+        });
     lbm.init(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
 
     for _ in 0..steps {
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Step Encoder"),
-        });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Step Encoder"),
+            });
         lbm.step(&mut encoder);
         ctx.queue.submit(std::iter::once(encoder.finish()));
     }
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     lbm.extract(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
 
     let data = lbm.download_macro_data(ctx.device, ctx.queue);
     let metrics = MacroMetrics::compute(&data);
 
-    let mut result = DiagnosticResult::pass(&format!("uniform_{:?}_{}steps_{}^3", precision, steps, nx));
-    
+    let mut result =
+        DiagnosticResult::pass(&format!("uniform_{:?}_{}steps_{}^3", precision, steps, nx));
+
     if metrics.nan_count > 0 {
-        result = DiagnosticResult::fail(&result.name, &format!("NaNs detected: {}", metrics.nan_count));
+        result = DiagnosticResult::fail(
+            &result.name,
+            &format!("NaNs detected: {}", metrics.nan_count),
+        );
     }
-    
+
     if (metrics.rho_mean - 1.0).abs() > 1e-5 {
-        result = DiagnosticResult::warn(&result.name, &format!("Mass drift detected: mean rho = {}", metrics.rho_mean));
+        result = DiagnosticResult::warn(
+            &result.name,
+            &format!("Mass drift detected: mean rho = {}", metrics.rho_mean),
+        );
     }
 
     if metrics.max_u > 1e-5 {
-        result = DiagnosticResult::warn(&result.name, &format!("Velocity noise: max_u = {}", metrics.max_u));
+        result = DiagnosticResult::warn(
+            &result.name,
+            &format!("Velocity noise: max_u = {}", metrics.max_u),
+        );
     }
 
     result

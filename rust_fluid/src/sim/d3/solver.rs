@@ -1,28 +1,35 @@
+//! WGPU pipeline ownership and dispatch for the D3Q19 solver.
+
 use crate::sim::common::precision::Precision;
 use crate::sim::d3::boundary::Boundary3D;
 use crate::sim::d3::collision::Collision3D;
 use crate::sim::d3::config::SimulationConfig3D;
-use crate::sim::d3::config::InitType;
-use crate::sim::d3::lattice::Lattice3D;
-use crate::sim::d3::shader::compiler::ShaderCompiler3D;
+// use crate::sim::d3::config::InitType;
 use crate::sim::common::precision::PrecisionConfig;
 use crate::sim::d3::buffers::SimBuffers3D;
+use crate::sim::d3::lattice::Lattice3D;
+use crate::sim::d3::shader::compiler::ShaderCompiler3D;
 
+/// A compiled D3Q19 simulation and its in-place alternating-access state.
 pub struct Lbm3D {
     pub buffers: SimBuffers3D,
     pub config: SimulationConfig3D,
     init_pipeline: wgpu::ComputePipeline,
     step_even_pipeline: wgpu::ComputePipeline,
     step_odd_pipeline: wgpu::ComputePipeline,
+    outlet_even_pipeline: wgpu::ComputePipeline,
+    outlet_odd_pipeline: wgpu::ComputePipeline,
     extract_even_pipeline: wgpu::ComputePipeline,
     extract_odd_pipeline: wgpu::ComputePipeline,
     wg_x: u32,
     wg_y: u32,
     wg_z: u32,
+    has_outlet: bool,
     pub step_count: u32,
 }
 
 impl Lbm3D {
+    /// Compiles specialized shaders, allocates buffers, and creates pipelines.
     pub fn new(
         device: &wgpu::Device,
         config: SimulationConfig3D,
@@ -33,9 +40,17 @@ impl Lbm3D {
     ) -> Self {
         let prec_cfg = PrecisionConfig::from(precision);
 
-        let (init_src, even_src, odd_src, extract_src) = ShaderCompiler3D::compile(
-            lattice, collision, boundaries, &prec_cfg, config.pure_fluid, config.init_type, &config
+        let (init_src, even_src, odd_src, extract_even_src) = ShaderCompiler3D::compile(
+            lattice,
+            collision,
+            boundaries,
+            &prec_cfg,
+            config.pure_fluid,
+            config.init_type,
+            &config,
         );
+        let extract_odd_src =
+            extract_even_src.replace("override PHASE: u32 = 0u;", "override PHASE: u32 = 1u;");
 
         let init_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("LBM3D Init Shader"),
@@ -52,18 +67,35 @@ impl Lbm3D {
             source: wgpu::ShaderSource::Wgsl(odd_src.into()),
         });
 
-        let extract_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("LBM3D Extract Shader"),
-            source: wgpu::ShaderSource::Wgsl(extract_src.into()),
+        let extract_even_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("LBM3D Extract Even Shader"),
+            source: wgpu::ShaderSource::Wgsl(extract_even_src.into()),
+        });
+
+        let extract_odd_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("LBM3D Extract Odd Shader"),
+            source: wgpu::ShaderSource::Wgsl(extract_odd_src.into()),
         });
 
         let wg_x = (config.nx + config.wgs_x - 1) / config.wgs_x;
         let wg_y = (config.ny + config.wgs_y - 1) / config.wgs_y;
         let wg_z = (config.nz + config.wgs_z - 1) / config.wgs_z;
+        let has_outlet = boundaries.iter().any(|boundary| boundary.type_id() == 3);
 
         let (init_bgl, step_bgl, extract_bgl) = Self::create_bgls(device);
         let bytes_per_pop = if prec_cfg.pop_type == "f32" { 4 } else { 2 };
-        let buffers = SimBuffers3D::new(device, config.nx, config.ny, config.nz, 19, bytes_per_pop, config.num_boundary_configs, &init_bgl, &step_bgl, &extract_bgl);
+        let buffers = SimBuffers3D::new(
+            device,
+            config.nx,
+            config.ny,
+            config.nz,
+            19,
+            bytes_per_pop,
+            config.num_boundary_configs,
+            &init_bgl,
+            &step_bgl,
+            &extract_bgl,
+        );
 
         let init_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("LBM3D Init Pipeline Layout"),
@@ -104,29 +136,52 @@ impl Lbm3D {
             cache: None,
         });
 
-        let extract_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("LBM3D Extract Pipeline Layout"),
-            bind_group_layouts: &[Some(&extract_bgl)],
-            immediate_size: 0,
-        });
+        let outlet_even_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("LBM3D Outlet Prepare Even Pipeline"),
+                layout: Some(&step_pipeline_layout),
+                module: &even_module,
+                entry_point: Some("prepare_outlet"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
-        let extract_even_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("LBM3D Extract Even Pipeline"),
-            layout: Some(&extract_pipeline_layout),
-            module: &extract_module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let outlet_odd_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("LBM3D Outlet Prepare Odd Pipeline"),
+                layout: Some(&step_pipeline_layout),
+                module: &odd_module,
+                entry_point: Some("prepare_outlet"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
-        let extract_odd_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("LBM3D Extract Odd Pipeline"),
-            layout: Some(&extract_pipeline_layout),
-            module: &extract_module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let extract_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("LBM3D Extract Pipeline Layout"),
+                bind_group_layouts: &[Some(&extract_bgl)],
+                immediate_size: 0,
+            });
+
+        let extract_even_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("LBM3D Extract Even Pipeline"),
+                layout: Some(&extract_pipeline_layout),
+                module: &extract_even_module,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
+        let extract_odd_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("LBM3D Extract Odd Pipeline"),
+                layout: Some(&extract_pipeline_layout),
+                module: &extract_odd_module,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
         Self {
             buffers,
@@ -134,17 +189,30 @@ impl Lbm3D {
             init_pipeline,
             step_even_pipeline,
             step_odd_pipeline,
+            outlet_even_pipeline,
+            outlet_odd_pipeline,
             extract_even_pipeline,
             extract_odd_pipeline,
             wg_x,
             wg_y,
             wg_z,
+            has_outlet,
             step_count: 0,
         }
     }
 
-    fn create_bgls(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayout, wgpu::BindGroupLayout) {
-        fn bgl_storage_entry(binding: u32, visibility: wgpu::ShaderStages, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+    fn create_bgls(
+        device: &wgpu::Device,
+    ) -> (
+        wgpu::BindGroupLayout,
+        wgpu::BindGroupLayout,
+        wgpu::BindGroupLayout,
+    ) {
+        fn bgl_storage_entry(
+            binding: u32,
+            visibility: wgpu::ShaderStages,
+            read_only: bool,
+        ) -> wgpu::BindGroupLayoutEntry {
             wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility,
@@ -156,21 +224,20 @@ impl Lbm3D {
                 count: None,
             }
         }
-        
+
         let init_entries = [
             bgl_storage_entry(0, wgpu::ShaderStages::COMPUTE, false), // fa
             bgl_storage_entry(2, wgpu::ShaderStages::COMPUTE, true),  // flags (read-only)
         ];
 
         let step_entries = [
-            bgl_storage_entry(0, wgpu::ShaderStages::COMPUTE, true),  // input pop
-            bgl_storage_entry(1, wgpu::ShaderStages::COMPUTE, false), // output pop
+            bgl_storage_entry(0, wgpu::ShaderStages::COMPUTE, false), // in-place populations
             bgl_storage_entry(2, wgpu::ShaderStages::COMPUTE, true),  // flags
             bgl_storage_entry(3, wgpu::ShaderStages::COMPUTE, true),  // boundary configs
         ];
 
         let extract_entries = [
-            bgl_storage_entry(0, wgpu::ShaderStages::COMPUTE, true),  // input pop
+            bgl_storage_entry(0, wgpu::ShaderStages::COMPUTE, true), // input pop
             bgl_storage_entry(1, wgpu::ShaderStages::COMPUTE, false), // macro_data
         ];
 
@@ -192,11 +259,13 @@ impl Lbm3D {
         (init_bgl, step_bgl, extract_bgl)
     }
 
+    /// Uploads encoded cell flags and packed boundary configuration values.
     pub fn write_buffers(&self, queue: &wgpu::Queue, flags: &[u32], bcs: &[f32]) {
         queue.write_buffer(&self.buffers.flags, 0, bytemuck::cast_slice(flags));
         queue.write_buffer(&self.buffers.boundary_configs, 0, bytemuck::cast_slice(bcs));
     }
 
+    /// Records population initialization into the supplied command encoder.
     pub fn init(&self, encoder: &mut wgpu::CommandEncoder) {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("LBM3D Init Pass"),
@@ -208,30 +277,46 @@ impl Lbm3D {
         pass.dispatch_workgroups(self.wg_x, self.wg_y, self.wg_z);
     }
 
+    /// Records one outlet preparation and collide-stream step, then flips phase.
     pub fn step(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("LBM3D Step Pass"),
-            timestamp_writes: None,
-        });
-
-        if self.step_count % 2 == 0 {
-            pass.set_pipeline(&self.step_even_pipeline);
-            pass.set_bind_group(0, &self.buffers.step_bg_a, &[]);
-        } else {
-            pass.set_pipeline(&self.step_odd_pipeline);
-            pass.set_bind_group(0, &self.buffers.step_bg_b, &[]);
+        if self.has_outlet {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("LBM3D Outlet Prepare Pass"),
+                timestamp_writes: None,
+            });
+            if self.step_count % 2 == 0 {
+                pass.set_pipeline(&self.outlet_even_pipeline);
+            } else {
+                pass.set_pipeline(&self.outlet_odd_pipeline);
+            }
+            pass.set_bind_group(0, &self.buffers.step_bg, &[]);
+            pass.dispatch_workgroups((self.config.ny + 7) / 8, (self.config.nz + 7) / 8, 1);
         }
 
-        pass.dispatch_workgroups(self.wg_x, self.wg_y, self.wg_z);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("LBM3D Step Pass"),
+                timestamp_writes: None,
+            });
+            if self.step_count % 2 == 0 {
+                pass.set_pipeline(&self.step_even_pipeline);
+            } else {
+                pass.set_pipeline(&self.step_odd_pipeline);
+            }
+            pass.set_bind_group(0, &self.buffers.step_bg, &[]);
+            pass.dispatch_workgroups(self.wg_x, self.wg_y, self.wg_z);
+        }
         self.step_count += 1;
     }
 
+    /// Records several consecutive steps in one command encoder.
     pub fn step_multiple(&mut self, encoder: &mut wgpu::CommandEncoder, steps: u32) {
         for _ in 0..steps {
             self.step(encoder);
         }
     }
 
+    /// Records conversion of the active population phase to macroscopic fields.
     pub fn extract(&mut self, encoder: &mut wgpu::CommandEncoder) {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("LBM3D Extract Pass"),
@@ -240,18 +325,18 @@ impl Lbm3D {
 
         if self.step_count % 2 == 0 {
             pass.set_pipeline(&self.extract_even_pipeline);
-            pass.set_bind_group(0, &self.buffers.extract_bg_a, &[]);
         } else {
             pass.set_pipeline(&self.extract_odd_pipeline);
-            pass.set_bind_group(0, &self.buffers.extract_bg_b, &[]);
         }
+        pass.set_bind_group(0, &self.buffers.extract_bg, &[]);
 
         pass.dispatch_workgroups(self.wg_x, self.wg_y, self.wg_z);
     }
 
+    /// Synchronizes and downloads `[u_x, u_y, u_z, rho]` for every cell.
     pub fn download_macro_data(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<[f32; 4]> {
         let size = (self.config.nx * self.config.ny * self.config.nz * 16) as wgpu::BufferAddress;
-        
+
         let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Macro Data Staging Buffer"),
             size,
@@ -268,13 +353,17 @@ impl Lbm3D {
 
         let buffer_slice = staging_buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
-        
+
         buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         receiver.recv().unwrap().unwrap();
 
         let data = buffer_slice.get_mapped_range();
-        let data = if let Ok(d) = data { d } else { panic!("Map failed") };
+        let data = if let Ok(d) = data {
+            d
+        } else {
+            panic!("Map failed")
+        };
         let result = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         staging_buffer.unmap();

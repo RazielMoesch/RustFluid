@@ -1,5 +1,8 @@
+//! Standard D2Q9 directions, weights, opposites, and reflections.
+
 use super::Lattice2D;
 
+/// Nine-velocity square lattice used by `Lbm2D`.
 pub struct D2Q9;
 
 impl D2Q9 {
@@ -52,19 +55,23 @@ const OPP = array<u32, 9>(
     }
 
     fn reflect_x(&self) -> Option<&'static str> {
-        Some(r#"
+        Some(
+            r#"
 const REFLECT_X = array<u32, 9>(
     0u, 3u, 2u, 1u, 4u, 6u, 5u, 8u, 7u
 );
-"#)
+"#,
+        )
     }
 
     fn reflect_y(&self) -> Option<&'static str> {
-        Some(r#"
+        Some(
+            r#"
 const REFLECT_Y = array<u32, 9>(
     0u, 1u, 4u, 3u, 2u, 8u, 7u, 6u, 5u
 );
-"#)
+"#,
+        )
     }
 
     fn ex_array(&self) -> &[i32] {

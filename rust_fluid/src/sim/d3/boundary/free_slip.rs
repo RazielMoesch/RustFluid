@@ -1,5 +1,8 @@
+//! Specular-reflection walls that remove normal velocity without tangential drag.
+
 use super::Boundary3D;
 
+/// Free-slip wall whose normal is the Y axis.
 pub struct FreeSlipY;
 
 impl Boundary3D for FreeSlipY {
@@ -12,20 +15,24 @@ impl Boundary3D for FreeSlipY {
     }
 
     fn pull_even(&self) -> Option<&'static str> {
-        Some(r#"
-    // Specular reflection for top/bottom walls (Flips Y, preserves X, Z)
-    pulled_f = load_fa(cell_idx + REFLECT_Y[i] * TOTAL_CELLS);
-"#)
+        Some(
+            r#"
+    // Specular reflection for top/bottom walls (flips Y, preserves X and Z).
+    pulled_f = load_streamed_at(i32(x), i32(y), i32(z), REFLECT_Y[i]);
+"#,
+        )
     }
 
     fn pull_odd(&self) -> Option<&'static str> {
-        Some(r#"
-    // Inverted memory read for the specular reflection
-    pulled_f = load_fa(cell_idx + OPP[REFLECT_Y[i]] * TOTAL_CELLS);
-"#)
+        Some(
+            r#"
+    pulled_f = load_streamed_at(i32(x), i32(y), i32(z), REFLECT_Y[i]);
+"#,
+        )
     }
 }
 
+/// Free-slip wall whose normal is the X axis.
 pub struct FreeSlipX;
 
 impl Boundary3D for FreeSlipX {
@@ -38,20 +45,24 @@ impl Boundary3D for FreeSlipX {
     }
 
     fn pull_even(&self) -> Option<&'static str> {
-        Some(r#"
-    // Specular reflection for left/right walls (Flips X, preserves Y, Z)
-    pulled_f = load_fa(cell_idx + REFLECT_X[i] * TOTAL_CELLS);
-"#)
+        Some(
+            r#"
+    // Specular reflection for left/right walls (flips X, preserves Y and Z).
+    pulled_f = load_streamed_at(i32(x), i32(y), i32(z), REFLECT_X[i]);
+"#,
+        )
     }
 
     fn pull_odd(&self) -> Option<&'static str> {
-        Some(r#"
-    // Inverted memory read for the specular reflection
-    pulled_f = load_fa(cell_idx + OPP[REFLECT_X[i]] * TOTAL_CELLS);
-"#)
+        Some(
+            r#"
+    pulled_f = load_streamed_at(i32(x), i32(y), i32(z), REFLECT_X[i]);
+"#,
+        )
     }
 }
 
+/// Free-slip wall whose normal is the Z axis.
 pub struct FreeSlipZ;
 
 impl Boundary3D for FreeSlipZ {
@@ -64,16 +75,19 @@ impl Boundary3D for FreeSlipZ {
     }
 
     fn pull_even(&self) -> Option<&'static str> {
-        Some(r#"
-    // Specular reflection for front/back walls (Flips Z, preserves X, Y)
-    pulled_f = load_fa(cell_idx + REFLECT_Z[i] * TOTAL_CELLS);
-"#)
+        Some(
+            r#"
+    // Specular reflection for front/back walls (flips Z, preserves X and Y).
+    pulled_f = load_streamed_at(i32(x), i32(y), i32(z), REFLECT_Z[i]);
+"#,
+        )
     }
 
     fn pull_odd(&self) -> Option<&'static str> {
-        Some(r#"
-    // Inverted memory read for the specular reflection
-    pulled_f = load_fa(cell_idx + OPP[REFLECT_Z[i]] * TOTAL_CELLS);
-"#)
+        Some(
+            r#"
+    pulled_f = load_streamed_at(i32(x), i32(y), i32(z), REFLECT_Z[i]);
+"#,
+        )
     }
 }

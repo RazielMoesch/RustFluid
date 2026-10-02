@@ -1,7 +1,13 @@
+//! Population storage selection and generated WGSL load/store helpers.
+
+/// Storage format used for distribution functions on the GPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Precision {
+    /// Native 32-bit floating-point populations.
     F32,
+    /// 16-bit storage converted to 32-bit values for computation.
     FP16S,
+    /// Let adapter setup choose a supported storage format.
     Auto,
 }
 
@@ -30,6 +36,7 @@ impl Precision {
     }
 }
 
+/// Text substitutions needed to generate shaders for a precision mode.
 pub struct PrecisionConfig {
     pub enable_directive: &'static str,
     pub pop_type: &'static str,
@@ -55,7 +62,7 @@ impl PrecisionConfig {
         if self.pop_type == "f32" {
             r#"
 fn load_fa(index: u32) -> f32 { return fa[index]; }
-fn store_fb(index: u32, value: f32) { fb[index] = value; }
+fn store_fb(index: u32, value: f32) { fa[index] = value; }
 "#
             .to_string()
         } else {
@@ -66,7 +73,7 @@ fn load_fa(index: u32) -> f32 {
 }
 fn store_fb(index: u32, value: f32) {
     let dir = index / TOTAL_CELLS;
-    fb[index] = f16((value - WEIGHTS[dir]) * 32768.0);
+    fa[index] = f16((value - WEIGHTS[dir]) * 32768.0);
 }
 "#
             .to_string()

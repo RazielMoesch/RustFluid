@@ -1,8 +1,11 @@
+//! Builder-driven execution without a window or presentation surface.
+
 use std::time::Instant;
 // use crate::gpu::GPU;
 use crate::runtime::context::HeadlessContext;
 use crate::runtime::simulation::Simulation;
 
+/// Warmup and timed-step counts for a headless run.
 pub struct HeadlessConfig {
     pub warmup_steps: u32,
     pub steps: u32,
@@ -19,6 +22,7 @@ impl Default for HeadlessConfig {
     }
 }
 
+/// Fluent headless runner parameterized by a simulation factory.
 pub struct HeadlessBuilder<S, F>
 where
     S: Simulation,
@@ -64,16 +68,18 @@ where
         let factory = self
             .simulation_factory
             .expect("HeadlessBuilder requires a simulation factory");
-        
+
         Headless::run_internal(self.config, factory)
     }
 }
 
+/// Wall-clock measurements returned after a headless execution.
 pub struct HeadlessResult {
     pub total_steps: u32,
     pub elapsed_seconds: f64,
 }
 
+/// Entry point for constructing a `HeadlessBuilder`.
 pub struct Headless;
 
 impl Headless {
@@ -95,22 +101,22 @@ impl Headless {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             ..Default::default()
-        })).expect("Failed to get headless adapter");
+        }))
+        .expect("Failed to get headless adapter");
 
         let mut required = wgpu::Features::VERTEX_WRITABLE_STORAGE;
         if adapter.features().contains(wgpu::Features::SHADER_F16) {
             required |= wgpu::Features::SHADER_F16;
         }
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("Headless GPU"),
-                required_features: required,
-                required_limits: adapter.limits(),
-                ..Default::default()
-            },
-        )).expect("Failed to get headless device & queue");
-        
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("Headless GPU"),
+            required_features: required,
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("Failed to get headless device & queue");
+
         let ctx = HeadlessContext {
             device: &device,
             queue: &queue,
@@ -136,15 +142,15 @@ impl Headless {
         let mut steps_remaining = config.steps;
         while steps_remaining > 0 {
             let steps = steps_remaining.min(config.batch_size);
-            
+
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Headless Batch Encoder"),
             });
             simulation.step(&mut encoder, steps);
-            
+
             queue.submit(std::iter::once(encoder.finish()));
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            
+
             steps_remaining -= steps;
         }
 

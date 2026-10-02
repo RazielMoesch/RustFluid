@@ -1,6 +1,9 @@
+//! Zou-He velocity reconstruction on the minimum-X face.
+
 use super::Boundary2D;
 use crate::sim::d2::boundary::fluid::Fluid;
 
+/// Prescribes left-face velocity while recovering density locally.
 pub struct ZouHeLeftVelocity;
 
 impl Boundary2D for ZouHeLeftVelocity {
@@ -21,7 +24,8 @@ impl Boundary2D for ZouHeLeftVelocity {
     }
 
     fn post_streaming(&self) -> Option<&'static str> {
-        Some(r#"
+        Some(
+            r#"
     let my_type = my_flag >> FLAG_TYPE_SHIFT;
     
     if (my_type == 5u) {
@@ -44,6 +48,7 @@ impl Boundary2D for ZouHeLeftVelocity {
         rho = rho_in;
         u = cfg.vel * rho_in;
     }
-"#)
+"#,
+        )
     }
 }

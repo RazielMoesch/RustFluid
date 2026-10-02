@@ -1,18 +1,21 @@
-use crate::gpu::utils::create_bgl;
+//! WGPU pipeline ownership and dispatch for the D2Q9 solver.
+
 use crate::gpu::utils::bgl_storage_entry;
-use crate::sim::common::precision::PrecisionConfig;
+use crate::gpu::utils::create_bgl;
 use crate::sim::common::precision::Precision;
+use crate::sim::common::precision::PrecisionConfig;
+use crate::sim::d2::boundary::Boundary2D;
 use crate::sim::d2::buffers::SimBuffers2D;
+use crate::sim::d2::collision::Collision2D;
 use crate::sim::d2::config::SimulationConfig2D;
 use crate::sim::d2::lattice::Lattice2D;
-use crate::sim::d2::collision::Collision2D;
-use crate::sim::d2::boundary::Boundary2D;
 use crate::sim::d2::shader::compiler::ShaderCompiler2D;
 
+/// A compiled D2Q9 simulation and its alternating population state.
 pub struct Lbm2D {
     pub buffers: SimBuffers2D,
     pub config: SimulationConfig2D,
-    
+
     init_pipeline: wgpu::ComputePipeline,
     step_even_pipeline: wgpu::ComputePipeline,
     step_odd_pipeline: wgpu::ComputePipeline,
@@ -35,13 +38,9 @@ impl Lbm2D {
         boundaries: &[&dyn Boundary2D],
     ) -> Self {
         let precision_cfg = PrecisionConfig::from(precision);
-        
-        let (init_wgsl, step_even_wgsl, step_odd_wgsl, extract_wgsl) = ShaderCompiler2D::compile(
-            lattice,
-            collision,
-            boundaries,
-            &precision_cfg,
-        );
+
+        let (init_wgsl, step_even_wgsl, step_odd_wgsl, extract_wgsl) =
+            ShaderCompiler2D::compile(lattice, collision, boundaries, &precision_cfg);
 
         let (init_bgl, step_bgl, extract_bgl) = Self::create_bgls(device);
 
@@ -207,7 +206,13 @@ impl Lbm2D {
         }
     }
 
-    fn create_bgls(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayout, wgpu::BindGroupLayout) {
+    fn create_bgls(
+        device: &wgpu::Device,
+    ) -> (
+        wgpu::BindGroupLayout,
+        wgpu::BindGroupLayout,
+        wgpu::BindGroupLayout,
+    ) {
         let mut entries = vec![
             bgl_storage_entry(0, wgpu::ShaderStages::COMPUTE, false),
             bgl_storage_entry(2, wgpu::ShaderStages::COMPUTE, true),

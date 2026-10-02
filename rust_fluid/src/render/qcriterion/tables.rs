@@ -1,3 +1,5 @@
+//! Marching-cubes topology tables shared with the generated shader.
+
 /// Standard Marching Cubes lookup tables (Paul Bourke / Cory Gene Bloyd convention).
 ///
 /// Corner numbering:
@@ -24,13 +26,24 @@
 /// Case index construction: bit i is set when corner i's value is BELOW the isovalue.
 
 /// Maps each edge (0..11) to the two corner indices it connects.
+/// Endpoint corner indices for the twelve cube edges.
 pub const EDGE_CONN: [[u32; 2]; 12] = [
-    [0, 1], [1, 2], [2, 3], [3, 0], // bottom face
-    [4, 5], [5, 6], [6, 7], [7, 4], // top face
-    [0, 4], [1, 5], [2, 6], [3, 7], // vertical edges
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [3, 0], // bottom face
+    [4, 5],
+    [5, 6],
+    [6, 7],
+    [7, 4], // top face
+    [0, 4],
+    [1, 5],
+    [2, 6],
+    [3, 7], // vertical edges
 ];
 
 /// Offset from cube origin for each corner (x, y, z).
+/// Unit-cube offsets for the eight marching-cubes corners.
 pub const CORNER_OFFSETS: [[f32; 3]; 8] = [
     [0.0, 0.0, 0.0], // 0
     [1.0, 0.0, 0.0], // 1
@@ -45,6 +58,7 @@ pub const CORNER_OFFSETS: [[f32; 3]; 8] = [
 /// For each of the 256 case indices, a 12-bit mask indicating which edges
 /// are intersected by the isosurface.
 #[rustfmt::skip]
+/// Active-edge mask indexed by the eight-bit corner classification.
 pub const EDGE_TABLE: [u32; 256] = [
     0x000, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c,
     0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03, 0xe09, 0xf00,
@@ -84,6 +98,7 @@ pub const EDGE_TABLE: [u32; 256] = [
 /// specified as triples of edge indices, terminated by -1.
 /// 256 rows × 16 columns = 4096 entries, row-major.
 #[rustfmt::skip]
+/// Triangle edge indices for all 256 marching-cubes cases.
 pub const TRI_TABLE: [i32; 4096] = [
     // Case 0
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,

@@ -1,5 +1,8 @@
+//! Single-relaxation-time BGK collision for D2Q9.
+
 use super::Collision2D;
 
+/// Relaxes every population with the configured `OMEGA`.
 pub struct Bgk;
 
 impl Bgk {

@@ -1,4 +1,7 @@
+//! Structured outcome returned by each diagnostic case.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Severity assigned to a diagnostic result.
 pub enum DiagnosticStatus {
     Pass,
     Warning,
@@ -6,6 +9,7 @@ pub enum DiagnosticStatus {
 }
 
 #[derive(Debug)]
+/// Named status and human-readable measurements for one case.
 pub struct DiagnosticResult {
     pub name: String,
     pub status: DiagnosticStatus,

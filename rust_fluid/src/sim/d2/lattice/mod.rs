@@ -1,5 +1,9 @@
+//! Two-dimensional discrete-velocity lattice definitions.
+
+/// Standard nine-direction square lattice.
 pub mod d2q9;
 
+/// Describes lattice constants in WGSL and Rust forms for shader generation.
 pub trait Lattice2D {
     fn name(&self) -> &'static str;
     fn q(&self) -> u32;
@@ -7,8 +11,12 @@ pub trait Lattice2D {
     fn ey(&self) -> &'static str;
     fn weights(&self) -> &'static str;
     fn opp(&self) -> &'static str;
-    fn reflect_x(&self) -> Option<&'static str> { None }
-    fn reflect_y(&self) -> Option<&'static str> { None }
+    fn reflect_x(&self) -> Option<&'static str> {
+        None
+    }
+    fn reflect_y(&self) -> Option<&'static str> {
+        None
+    }
 
     // Arrays for Rust-side unrolling
     fn ex_array(&self) -> &[i32];

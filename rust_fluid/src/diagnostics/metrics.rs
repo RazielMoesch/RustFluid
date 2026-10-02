@@ -1,3 +1,6 @@
+//! Reductions over downloaded `[u_x, u_y, u_z, rho]` values.
+
+/// Aggregate density, velocity, and validity measures for a field.
 pub struct MacroMetrics {
     pub rho_min: f32,
     pub rho_max: f32,
@@ -45,13 +48,21 @@ impl MacroMetrics {
         }
 
         let valid_n = (data.len() - nan_count - inf_count) as f32;
-        
+
         Self {
             rho_min,
             rho_max,
-            rho_mean: if valid_n > 0.0 { rho_sum / valid_n } else { f32::NAN },
+            rho_mean: if valid_n > 0.0 {
+                rho_sum / valid_n
+            } else {
+                f32::NAN
+            },
             max_u,
-            rms_u: if valid_n > 0.0 { (u2_sum / valid_n).sqrt() } else { f32::NAN },
+            rms_u: if valid_n > 0.0 {
+                (u2_sum / valid_n).sqrt()
+            } else {
+                f32::NAN
+            },
             mass: rho_sum,
             nan_count,
             inf_count,

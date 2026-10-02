@@ -1,3 +1,6 @@
+//! User-controlled constants used to specialize a D2Q9 solver.
+
+/// Grid, initialization, relaxation, and dispatch settings for `Lbm2D`.
 #[derive(Debug, Clone, Copy)]
 pub struct SimulationConfig2D {
     pub nx: u32,

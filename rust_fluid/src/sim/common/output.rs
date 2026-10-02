@@ -1,6 +1,11 @@
-use wgpu::{Buffer, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device, MapMode, Queue};
-use std::sync::mpsc;
+//! Helpers for synchronously downloading macroscopic solver output.
 
+use std::sync::mpsc;
+use wgpu::{
+    Buffer, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device, MapMode, Queue,
+};
+
+/// Copies a macro buffer to staging memory and returns its `f32` values.
 pub fn readback_macro_data(
     device: &Device,
     queue: &Queue,
@@ -31,9 +36,13 @@ pub fn readback_macro_data(
 
     // Wait for the GPU to finish
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    rx.recv().unwrap().expect("Failed to map the macro data readback buffer");
+    rx.recv()
+        .unwrap()
+        .expect("Failed to map the macro data readback buffer");
 
-    let data_ref = buffer_slice.get_mapped_range().expect("Failed to get mapped range");
+    let data_ref = buffer_slice
+        .get_mapped_range()
+        .expect("Failed to get mapped range");
     let floats: Vec<f32> = bytemuck::cast_slice(&data_ref).to_vec();
 
     drop(data_ref);

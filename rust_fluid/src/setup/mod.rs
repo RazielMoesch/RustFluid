@@ -1,6 +1,11 @@
+//! Domain flag construction and imported obstacle geometry.
+
+/// SVG rasterization and STL voxelization.
 pub mod loader;
+/// Setup-preview rendering support.
 pub mod setup_renderer;
 
+/// Builder-style two-dimensional domain and boundary configuration.
 pub struct SimDomain2D {
     pub w: u32,
     pub h: u32,
@@ -101,6 +106,7 @@ impl SimDomain2D {
     }
 }
 
+/// Builder-style three-dimensional domain and boundary configuration.
 pub struct SimDomain3D {
     pub w: u32,
     pub h: u32,

@@ -1,3 +1,5 @@
+//! Q-criterion evaluation and GPU marching-cubes surface extraction.
+
 pub mod tables;
 
 use crate::gpu::utils::{
@@ -32,7 +34,9 @@ fn is_solid(x: i32, y: i32, z: i32) -> bool {
         return true;
     }
     let idx = u32(x) + u32(y) * NX + u32(z) * NX * NY;
-    return (flags[idx] >> FLAG_TYPE_SHIFT) != 0u;
+    // Only bounce-back is solid.  Inlet, outlet and free-slip cells live on
+    // domain faces but still carry valid macroscopic velocity data.
+    return (flags[idx] >> FLAG_TYPE_SHIFT) == 1u;
 }
 
 fn get_u(x: i32, y: i32, z: i32, valid: ptr<function, bool>) -> vec3<f32> {
@@ -41,7 +45,7 @@ fn get_u(x: i32, y: i32, z: i32, valid: ptr<function, bool>) -> vec3<f32> {
         return vec3<f32>(0.0);
     }
     let idx = u32(x) + u32(y) * NX + u32(z) * NX * NY;
-    if ((flags[idx] >> FLAG_TYPE_SHIFT) != 0u) {
+    if ((flags[idx] >> FLAG_TYPE_SHIFT) == 1u) {
         *valid = false;
         return vec3<f32>(0.0);
     }
@@ -224,6 +228,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Each thread handles one cube spanning (cx,cy,cz) to (cx+1,cy+1,cz+1).
     if (cx >= NX - 1u || cy >= NY - 1u || cz >= NZ - 1u) { return; }
 
+    // Domain-face boundary conditions can legitimately be discontinuous from
+    // the first interior sample.  They are not Q structures, so never run
+    // marching cubes across the outermost layer.  This removes the six opaque
+    // sheets that otherwise enclose the volume and hide its interior.
+    if (cx == 0u || cy == 0u || cz == 0u ||
+        cx + 2u >= NX || cy + 2u >= NY || cz + 2u >= NZ) { return; }
+
     // Load Q at 8 corners
     var q: array<f32, 8>;
     q[0] = textureLoad(q_tex, vec3<i32>(i32(cx),     i32(cy),     i32(cz)),     0).r;
@@ -359,9 +370,9 @@ struct Camera {
     view_proj: mat4x4<f32>,
     eye: vec4<f32>,
     max_speed: f32,
-    pad0: f32,
-    pad1: f32,
-    pad2: f32,
+    clip_limit: f32,
+    clip_axis: f32,
+    clip_from_max: f32,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -400,6 +411,12 @@ fn ACESFilm(x: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let coord = select(in.world_pos.x, select(in.world_pos.y, in.world_pos.z, camera.clip_axis > 1.5), camera.clip_axis > 0.5);
+    if (camera.clip_from_max < 0.5) {
+        if (coord > camera.clip_limit) { discard; }
+    } else {
+        if (coord < camera.clip_limit) { discard; }
+    }
     let normal = normalize(in.normal);
     let view_dir = normalize(camera.eye.xyz - in.world_pos);
 
@@ -431,6 +448,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 // ── QCriterionRenderer3D ─────────────────────────────────────────────────────
 
 #[allow(dead_code)]
+/// Computes, clips, colors, and renders a Q-criterion isosurface.
 pub struct QCriterionRenderer3D {
     // Q-field compute
     q_texture: wgpu::Texture,
@@ -621,11 +639,7 @@ impl QCriterionRenderer3D {
         // ── Override constants for grid dimensions ──────────────────────
 
         let grid_comp_opts = wgpu::PipelineCompilationOptions {
-            constants: &[
-                ("100", nx as f64),
-                ("101", ny as f64),
-                ("102", nz as f64),
-            ],
+            constants: &[("100", nx as f64), ("101", ny as f64), ("102", nz as f64)],
             ..Default::default()
         };
 
@@ -636,8 +650,8 @@ impl QCriterionRenderer3D {
         let q_compute_bgl = create_bgl(
             device,
             &[
-                bgl_storage_entry(0, wgpu::ShaderStages::COMPUTE, true),  // macro_data
-                bgl_storage_entry(1, wgpu::ShaderStages::COMPUTE, true),  // flags
+                bgl_storage_entry(0, wgpu::ShaderStages::COMPUTE, true), // macro_data
+                bgl_storage_entry(1, wgpu::ShaderStages::COMPUTE, true), // flags
                 bgl_storage_texture_entry(
                     2,
                     wgpu::ShaderStages::COMPUTE,
@@ -669,21 +683,16 @@ impl QCriterionRenderer3D {
             immediate_size: 0,
         });
 
-        let q_compute_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Q Compute Pipeline"),
-                layout: Some(&q_compute_layout),
-                module: &q_shader,
-                entry_point: Some("main"),
-                compilation_options: grid_comp_opts.clone(),
-                cache: None,
-            });
+        let q_compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Q Compute Pipeline"),
+            layout: Some(&q_compute_layout),
+            module: &q_shader,
+            entry_point: Some("main"),
+            compilation_options: grid_comp_opts.clone(),
+            cache: None,
+        });
 
-        let q_wg = [
-            (nx + 7) / 8,
-            (ny + 7) / 8,
-            (nz + 1) / 2,
-        ];
+        let q_wg = [(nx + 7) / 8, (ny + 7) / 8, (nz + 1) / 2];
 
         // ═══════════════════════════════════════════════════════════════
         // Pipeline 2: Marching Cubes
@@ -698,13 +707,13 @@ impl QCriterionRenderer3D {
                     wgpu::TextureViewDimension::D3,
                     wgpu::TextureSampleType::Float { filterable: false },
                 ), // q_tex
-                bgl_storage_entry(1, wgpu::ShaderStages::COMPUTE, true),  // macro_data
-                bgl_storage_entry(2, wgpu::ShaderStages::COMPUTE, true),  // flags
+                bgl_storage_entry(1, wgpu::ShaderStages::COMPUTE, true), // macro_data
+                bgl_storage_entry(2, wgpu::ShaderStages::COMPUTE, true), // flags
                 bgl_storage_entry(3, wgpu::ShaderStages::COMPUTE, false), // vertices
                 bgl_storage_entry(4, wgpu::ShaderStages::COMPUTE, false), // indirect
-                bgl_storage_entry(5, wgpu::ShaderStages::COMPUTE, true),  // edge_table
-                bgl_storage_entry(6, wgpu::ShaderStages::COMPUTE, true),  // tri_table
-                bgl_uniform_entry(7, wgpu::ShaderStages::COMPUTE),        // params
+                bgl_storage_entry(5, wgpu::ShaderStages::COMPUTE, true), // edge_table
+                bgl_storage_entry(6, wgpu::ShaderStages::COMPUTE, true), // tri_table
+                bgl_uniform_entry(7, wgpu::ShaderStages::COMPUTE),       // params
             ],
         );
 
@@ -744,11 +753,7 @@ impl QCriterionRenderer3D {
         });
 
         // MC workgroups: one thread per cube, workgroup size (4,4,4)
-        let mc_wg = [
-            (nx - 1 + 3) / 4,
-            (ny - 1 + 3) / 4,
-            (nz - 1 + 3) / 4,
-        ];
+        let mc_wg = [(nx - 1 + 3) / 4, (ny - 1 + 3) / 4, (nz - 1 + 3) / 4];
 
         // ═══════════════════════════════════════════════════════════════
         // Pipeline 3: Finalize (clamp indirect vertex count)
@@ -776,18 +781,17 @@ impl QCriterionRenderer3D {
             immediate_size: 0,
         });
 
-        let finalize_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Finalize Pipeline"),
-                layout: Some(&finalize_layout),
-                module: &finalize_shader,
-                entry_point: Some("main"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[("200", max_vertices as f64)],
-                    ..Default::default()
-                },
-                cache: None,
-            });
+        let finalize_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Finalize Pipeline"),
+            layout: Some(&finalize_layout),
+            module: &finalize_shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &[("200", max_vertices as f64)],
+                ..Default::default()
+            },
+            cache: None,
+        });
 
         // ═══════════════════════════════════════════════════════════════
         // Pipeline 4: Triangle Rasterization
@@ -868,7 +872,9 @@ impl QCriterionRenderer3D {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None, // Disabled until winding is verified
+                // Marching-cubes winding is not guaranteed across every case;
+                // render both sides so internal structures do not disappear.
+                cull_mode: None,
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -918,6 +924,9 @@ impl QCriterionRenderer3D {
         view_proj: glam::Mat4,
         eye: glam::Vec3,
         max_speed: f32,
+        visible_fraction: f32,
+        clip_axis: u32,
+        clip_from_max: bool,
     ) {
         let mut data = [0.0f32; 24]; // 96 bytes / 4 = 24 f32s
         data[0..16].copy_from_slice(&view_proj.to_cols_array());
@@ -926,7 +935,25 @@ impl QCriterionRenderer3D {
         data[18] = eye.z;
         data[19] = 1.0; // pad
         data[20] = max_speed;
-        // 21..23 = pad
+        let visible_fraction = visible_fraction.clamp(0.0, 1.0);
+        let extent = match clip_axis {
+            1 => self.ny as f32,
+            2 => self.nz as f32,
+            _ => self.nx as f32,
+        };
+        data[21] = if clip_from_max {
+            if visible_fraction == 0.0 {
+                extent + 1.0
+            } else {
+                extent * (1.0 - visible_fraction)
+            }
+        } else if visible_fraction == 0.0 {
+            -1.0
+        } else {
+            extent * visible_fraction
+        };
+        data[22] = clip_axis as f32;
+        data[23] = if clip_from_max { 1.0 } else { 0.0 };
 
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&data));
     }
@@ -943,7 +970,13 @@ impl QCriterionRenderer3D {
     }
 
     /// Run Q compute + Marching Cubes + finalize. Call in the prepare phase.
-    pub fn prepare(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, iso_q: f32, max_speed: f32) {
+    pub fn prepare(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        iso_q: f32,
+        max_speed: f32,
+    ) {
         // Update MC params
         self.update_params(queue, iso_q, max_speed);
 

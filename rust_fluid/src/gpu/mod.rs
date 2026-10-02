@@ -1,8 +1,12 @@
+//! GPU adapter creation, capability checks, and reusable resource helpers.
+
+/// Small constructors for common `wgpu` resources.
 pub mod utils;
 
 use std::sync::Arc;
 use winit::window::Window;
 
+/// Features discovered on an adapter before device creation.
 pub struct GpuCapabilities {
     pub shader_f16: bool,
 }
@@ -61,6 +65,7 @@ pub fn check_f16_support(device: &wgpu::Device) -> bool {
     device.features().contains(wgpu::Features::SHADER_F16)
 }
 
+/// Window-capable adapter, device, queue, surface, and selected format.
 pub struct GPU {
     pub instance: wgpu::Instance,
     pub surface: wgpu::Surface<'static>,
@@ -90,7 +95,10 @@ impl GPU {
         if adapter.features().contains(wgpu::Features::SHADER_F16) {
             required |= wgpu::Features::SHADER_F16;
         }
-        if adapter.features().contains(wgpu::Features::FLOAT32_FILTERABLE) {
+        if adapter
+            .features()
+            .contains(wgpu::Features::FLOAT32_FILTERABLE)
+        {
             required |= wgpu::Features::FLOAT32_FILTERABLE;
         }
 
@@ -104,21 +112,16 @@ impl GPU {
             .await
             .expect("Failed to Get Device & Queue");
 
-        
-
         let config = surface
             .get_default_config(&adapter, size.width, size.height)
-
             .expect("Failed to Get Configuration");
-        
+
         let cfg = wgpu::SurfaceConfiguration {
             present_mode: wgpu::PresentMode::Immediate,
             ..config
         };
-        
-        surface.configure(&device, &cfg);
 
-        
+        surface.configure(&device, &cfg);
 
         Self {
             instance,
@@ -145,6 +148,7 @@ impl GPU {
     }
 }
 
+/// Surface-free adapter, device, and queue used by tests and benchmarks.
 pub struct HeadlessGPU {
     pub adapter: wgpu::Adapter,
     pub device: Arc<wgpu::Device>,

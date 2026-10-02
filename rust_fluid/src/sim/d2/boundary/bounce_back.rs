@@ -1,5 +1,8 @@
+//! No-slip halfway bounce-back for two-dimensional solid cells.
+
 use super::Boundary2D;
 
+/// Reflects incoming populations into their opposite directions.
 pub struct BounceBack;
 
 impl Boundary2D for BounceBack {
@@ -12,16 +15,20 @@ impl Boundary2D for BounceBack {
     }
 
     fn pull_even(&self) -> Option<&'static str> {
-        Some(r#"
+        Some(
+            r#"
     // Pull from our own cell's opposite direction 
     pulled_f = load_fa(cell_idx + OPP[i] * TOTAL_CELLS);
-"#)
+"#,
+        )
     }
 
     fn pull_odd(&self) -> Option<&'static str> {
-        Some(r#"
+        Some(
+            r#"
     // Pull from our own cell's opposite direction (stored non-inverted in this step)
     pulled_f = load_fa(cell_idx + i * TOTAL_CELLS);
-"#)
+"#,
+        )
     }
 }

@@ -1,7 +1,10 @@
+//! Benchmark statistics, presentation, CSV export, and D2 workgroup sweeps.
+
 use crate::sim::common::precision::Precision;
 use std::fmt;
 use std::time::Instant;
 
+/// Derived throughput and memory-traffic statistics for a timed run.
 #[derive(Clone)]
 pub struct BenchmarkResult {
     pub precision: Precision,
@@ -98,11 +101,19 @@ impl fmt::Display for BenchmarkResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "============================================")?;
         writeln!(f, "  Precision:             {}", self.precision.label())?;
-        writeln!(f, "  Population storage:    {} bytes", self.bytes_per_population)?;
+        writeln!(
+            f,
+            "  Population storage:    {} bytes",
+            self.bytes_per_population
+        )?;
         writeln!(f, "  DDF bytes/LUP:         {}", self.bytes_per_lup)?;
         writeln!(f, "--------------------------------------------")?;
         writeln!(f, "  Simulation time:       {:.6} s", self.elapsed_seconds)?;
-        writeln!(f, "  Simulation throughput: {:.2} steps/s", self.steps_per_second)?;
+        writeln!(
+            f,
+            "  Simulation throughput: {:.2} steps/s",
+            self.steps_per_second
+        )?;
         writeln!(f, "  LBM throughput:        {:.2} MLUPS", self.mlups)?;
         writeln!(
             f,
@@ -113,6 +124,7 @@ impl fmt::Display for BenchmarkResult {
     }
 }
 
+/// Hardware and solver settings that make a benchmark reproducible.
 pub struct BenchmarkMetadata {
     pub adapter_name: String,
     pub backend: String,
@@ -139,12 +151,22 @@ impl fmt::Display for BenchmarkMetadata {
         writeln!(f, "  Q:                 {}", self.q)?;
         writeln!(f, "  Collision:         {}", self.collision)?;
         writeln!(f, "  Precision:         {}", self.precision.label())?;
-        writeln!(f, "  Grid:              {} x {} ({} cells)", self.nx, self.ny, self.nx as u64 * self.ny as u64)?;
+        writeln!(
+            f,
+            "  Grid:              {} x {} ({} cells)",
+            self.nx,
+            self.ny,
+            self.nx as u64 * self.ny as u64
+        )?;
         writeln!(f, "  Workgroup:         {} x {}", self.wgs_x, self.wgs_y)?;
         writeln!(f, "  Omega:             {:.6}", self.omega)?;
         writeln!(f, "  Warmup steps:      {}", self.warmup_steps)?;
         writeln!(f, "  Benchmark steps:   {}", self.benchmark_steps)?;
-        write!(f, "  SHADER_F16:        {}", if self.shader_f16 { "YES" } else { "NO" })
+        write!(
+            f,
+            "  SHADER_F16:        {}",
+            if self.shader_f16 { "YES" } else { "NO" }
+        )
     }
 }
 
@@ -164,6 +186,7 @@ pub fn print_comparison(fp32: &BenchmarkResult, fp16: &BenchmarkResult) {
     println!("============================================");
 }
 
+/// Records wall-clock durations for independently submitted step batches.
 pub struct BatchTimer {
     batch_start: Instant,
     pub durations: Vec<f64>,
@@ -182,7 +205,8 @@ impl BatchTimer {
     }
 
     pub fn end_batch(&mut self) {
-        self.durations.push(self.batch_start.elapsed().as_secs_f64());
+        self.durations
+            .push(self.batch_start.elapsed().as_secs_f64());
     }
 }
 
@@ -225,6 +249,7 @@ pub fn export_csv_row(meta: &BenchmarkMetadata, result: &BenchmarkResult) -> Str
     )
 }
 
+/// Throughput measured for one two-dimensional workgroup shape.
 pub struct WorkgroupResult {
     pub wgs_x: u32,
     pub wgs_y: u32,
@@ -243,20 +268,14 @@ pub fn benchmark_workgroup_sizes(
     warmup_steps: u32,
     bench_steps: u32,
 ) -> Vec<WorkgroupResult> {
-    use crate::sim::d2::solver::Lbm2D;
     use crate::sim::d2::config::SimulationConfig2D;
+    use crate::sim::d2::solver::Lbm2D;
 
-    let candidates: &[(u32, u32)] = &[
-        (8, 8),
-        (16, 8),
-        (8, 16),
-        (16, 16),
-        (32, 4),
-        (32, 8),
-    ];
+    let candidates: &[(u32, u32)] = &[(8, 8), (16, 8), (8, 16), (16, 16), (32, 4), (32, 8)];
 
     let device_limits = device.limits();
-    let max_wg = device_limits.max_compute_workgroup_size_x
+    let max_wg = device_limits
+        .max_compute_workgroup_size_x
         .min(device_limits.max_compute_workgroup_size_y);
     let max_invocations = device_limits.max_compute_invocations_per_workgroup;
 
@@ -278,10 +297,10 @@ pub fn benchmark_workgroup_sizes(
             omega,
             num_boundary_configs: 1,
         };
-        
+
         // Use an empty boundaries list for the benchmark, or fluid boundary
         let boundaries: Vec<&dyn crate::sim::d2::boundary::Boundary2D> = vec![];
-        
+
         let mut lbm = Lbm2D::new(device, config, precision, lattice, collision, &boundaries);
 
         {

@@ -1,20 +1,25 @@
+//! Interactive composition of mesh, Q surface, streamlines, particles, and wireframe.
+
+use crate::camera::Camera3D;
 use crate::render::{
+    Render3D, RenderMode3D,
     mesh::{MeshRenderer, Vertex},
-    streamlines::StreamlineRenderer,
     particles::ParticleRenderer,
     qcriterion::QCriterionRenderer3D,
-    Render3D, RenderMode3D,
+    streamlines::StreamlineRenderer,
+    wireframe::DomainWireframeRenderer,
 };
-use crate::camera::Camera3D;
 use crate::runtime::{GraphicsContext, Renderer};
 use crate::sim::d3::solver::Lbm3D;
-use winit::event::{WindowEvent, ElementState, MouseButton};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
+/// Default renderer and input state for a three-dimensional LBM simulation.
 pub struct DefaultRenderer3D {
     pub flow_field: Render3D,
     pub particles: ParticleRenderer,
     pub streamlines: StreamlineRenderer,
+    pub wireframe: DomainWireframeRenderer,
     pub q_surface: QCriterionRenderer3D,
     pub mesh: Option<MeshRenderer>,
     pub camera: Camera3D,
@@ -22,6 +27,15 @@ pub struct DefaultRenderer3D {
     pub show_flow_streams: bool,
     pub show_streamlines: bool,
     pub show_q_surface: bool,
+    pub show_wireframe: bool,
+    pub show_mesh: bool,
+    streamline_visible_fraction: f32,
+    q_visible_fraction: f32,
+    flow_visible_fraction: f32,
+    /// Section-view clip axis: 0 = X, 1 = Y, 2 = Z.
+    clip_axis: u32,
+    /// If true, the visible fraction is measured from the high end of the axis.
+    clip_from_max: bool,
 
     pub needs_q_update: bool,
 
@@ -35,12 +49,21 @@ pub struct DefaultRenderer3D {
     mouse_pressed: bool,
     right_mouse_pressed: bool,
     last_cursor_pos: Option<winit::dpi::PhysicalPosition<f64>>,
+    pub is_paused: bool,
 }
 
-fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+fn create_depth_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("DefaultRenderer3D Depth"),
-        size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -65,11 +88,16 @@ impl DefaultRenderer3D {
         seed_grid_size: [u32; 3],
     ) -> Self {
         let window_size = ctx.window.inner_size();
-        let (depth_texture, depth_view) = create_depth_texture(ctx.device, window_size.width, window_size.height);
+        let (depth_texture, depth_view) =
+            create_depth_texture(ctx.device, window_size.width, window_size.height);
 
         let dummy_depth_texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Dummy Depth"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -77,7 +105,8 @@ impl DefaultRenderer3D {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let dummy_depth_view = dummy_depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let dummy_depth_view =
+            dummy_depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut flow_field = Render3D::new(
             ctx.device,
@@ -101,12 +130,14 @@ impl DefaultRenderer3D {
             &lbm.buffers.flags,
             ctx.surface_format,
             wgpu::TextureFormat::Depth32Float,
-            nx, ny, nz,
+            nx,
+            ny,
+            nz,
             seed_bounds_min,
             seed_bounds_max,
             seed_grid_size,
-            256, // max_points
-            0.5, // thickness
+            512,                       // max_points; enough to cross the 384-cell tunnel
+            0.35,                      // world-space ribbon half-width
             &flow_field.colormap_view, // Share colormap
             &flow_field.sampler,
         );
@@ -117,11 +148,25 @@ impl DefaultRenderer3D {
             &lbm.buffers.macro_data,
             &lbm.buffers.flags,
             ctx.surface_format,
-            nx, ny, nz,
+            wgpu::TextureFormat::Depth32Float,
+            nx,
+            ny,
+            nz,
             10000, // num_particles
-            0.05, // thickness
+            0.5,   // thickness; 0.1 projects to less than one pixel at startup
             &flow_field.colormap_view,
             &flow_field.sampler,
+        );
+
+        let wireframe = DomainWireframeRenderer::new(
+            ctx.device,
+            &flow_field.camera_buffer,
+            ctx.surface_format,
+            wgpu::TextureFormat::Depth32Float,
+            nx,
+            ny,
+            nz,
+            mesh_data,
         );
 
         let mesh = mesh_data.map(|(vertices, indices)| {
@@ -138,7 +183,7 @@ impl DefaultRenderer3D {
             m
         });
 
-        // Q-criterion Marching Cubes renderer — the new pipeline
+        // Extract and shade a triangle isosurface from the velocity-gradient field.
         let q_surface = QCriterionRenderer3D::new(
             ctx.device,
             ctx.queue,
@@ -154,28 +199,48 @@ impl DefaultRenderer3D {
 
         let mut camera = Camera3D::new(ctx.window.inner_size());
         camera.target = glam::Vec3::new(nx as f32 * 0.5, ny as f32 * 0.5, nz as f32 * 0.5);
-        camera.distance = 350.0;
+        camera.fov = 45.0_f32.to_radians();
+        let domain_radius = 0.5 * glam::Vec3::new(nx as f32, ny as f32, nz as f32).length();
+        camera.distance = 0.75 * domain_radius / (0.5 * camera.fov).tan();
         camera.yaw = -0.3;
         camera.pitch = std::f32::consts::PI / 6.0;
+        // Applying orbit parameters does not update `eye` automatically.
+        // Leaving it at Camera3D::new()'s origin produces an invalid/common
+        // view for every 3D rendering mode until the user first moves the camera.
+        camera.update();
+
+        let initial_mode = std::env::var("RUSTFLUID_RENDER_MODE").unwrap_or_else(|_| "q".into());
+        println!(
+            "Render keys: 1 streamlines, 2 Q, 3 flow, 4 wireframe, 5 STL mesh | clipping: I/P -/+10%, O cycle axis, L flip side"
+        );
 
         Self {
             flow_field,
             particles,
             streamlines,
+            wireframe,
             q_surface,
             mesh,
             camera,
-            show_streamlines: false,
-            show_q_surface: true,
-            show_flow_streams: false,
+            show_streamlines: initial_mode == "streamlines",
+            show_q_surface: matches!(initial_mode.as_str(), "q" | "wireframe" | "boundaries"),
+            show_flow_streams: initial_mode == "flow_streams",
+            show_wireframe: initial_mode == "wireframe" || initial_mode == "boundaries",
+            show_mesh: true,
+            streamline_visible_fraction: 1.0,
+            q_visible_fraction: 1.0,
+            flow_visible_fraction: 1.0,
+            clip_axis: 0,
+            clip_from_max: false,
             needs_q_update: true,
-            iso_q: 0.0001,
-            max_speed: 1.5,
+            iso_q: 0.000003,
+            max_speed: 0.15,
             depth_texture,
             depth_view,
             mouse_pressed: false,
             right_mouse_pressed: false,
             last_cursor_pos: None,
+            is_paused: false,
         }
     }
 
@@ -187,11 +252,35 @@ impl DefaultRenderer3D {
             &self.depth_view
         }
     }
+
+    fn section_side_label(&self) -> &'static str {
+        match (self.clip_axis, self.clip_from_max) {
+            (0, false) => "left (min X)",
+            (0, true) => "right (max X)",
+            (1, false) => "bottom (min Y)",
+            (1, true) => "top (max Y)",
+            (_, false) => "front (min Z)",
+            (_, true) => "back (max Z)",
+        }
+    }
+
+    fn adjust_section(&mut self, delta: f32) {
+        self.streamline_visible_fraction =
+            (self.streamline_visible_fraction + delta).clamp(0.0, 1.0);
+        self.q_visible_fraction = (self.q_visible_fraction + delta).clamp(0.0, 1.0);
+        self.flow_visible_fraction = (self.flow_visible_fraction + delta).clamp(0.0, 1.0);
+        println!(
+            "Section visible: {:.0}% from {}",
+            self.streamline_visible_fraction * 100.0,
+            self.section_side_label()
+        );
+    }
 }
 
 impl Renderer<Lbm3D> for DefaultRenderer3D {
     fn resize(&mut self, device: &wgpu::Device, _queue: &wgpu::Queue, width: u32, height: u32) {
-        self.camera.resize(winit::dpi::PhysicalSize::new(width, height));
+        self.camera
+            .resize(winit::dpi::PhysicalSize::new(width, height));
 
         // Resize fallback depth texture
         let (dt, dv) = create_depth_texture(device, width, height);
@@ -263,6 +352,12 @@ impl Renderer<Lbm3D> for DefaultRenderer3D {
                     }
                     PhysicalKey::Code(KeyCode::Digit1) => {
                         self.show_streamlines = !self.show_streamlines;
+                        if self.show_streamlines {
+                            // Streamline buffers are generated lazily.  Without
+                            // invalidating them here, enabling streamlines after
+                            // the first frame renders the initial zeroed counts.
+                            self.needs_q_update = true;
+                        }
                         println!("Show Streamlines: {}", self.show_streamlines);
                     }
                     PhysicalKey::Code(KeyCode::Digit2) => {
@@ -275,6 +370,67 @@ impl Renderer<Lbm3D> for DefaultRenderer3D {
                     PhysicalKey::Code(KeyCode::Digit3) => {
                         self.show_flow_streams = !self.show_flow_streams;
                         println!("Show Flow Streams: {}", self.show_flow_streams);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit4) => {
+                        self.show_wireframe = !self.show_wireframe;
+                        println!("Show Domain/Geometry Wireframe: {}", self.show_wireframe);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit5) => {
+                        self.show_mesh = !self.show_mesh;
+                        println!("Show STL Mesh: {}", self.show_mesh);
+                    }
+                    PhysicalKey::Code(KeyCode::KeyI) => {
+                        self.adjust_section(-0.05);
+                    }
+                    PhysicalKey::Code(KeyCode::KeyP) => {
+                        self.adjust_section(0.05);
+                    }
+                    PhysicalKey::Code(KeyCode::KeyO) => {
+                        self.clip_axis = (self.clip_axis + 1) % 3;
+                        let axis = match self.clip_axis {
+                            0 => "X",
+                            1 => "Y",
+                            _ => "Z",
+                        };
+                        println!("Section axis: {axis} from {}", self.section_side_label());
+                    }
+                    PhysicalKey::Code(KeyCode::KeyL) => {
+                        self.clip_from_max = !self.clip_from_max;
+                        println!("Section measured from {}", self.section_side_label());
+                    }
+                    PhysicalKey::Code(KeyCode::Digit7) => {
+                        self.q_visible_fraction = (self.q_visible_fraction - 0.1).clamp(0.0, 1.0);
+                        println!(
+                            "Q-criterion domain visible: {:.0}%",
+                            self.q_visible_fraction * 100.0
+                        );
+                    }
+                    PhysicalKey::Code(KeyCode::Digit8) => {
+                        self.q_visible_fraction = (self.q_visible_fraction + 0.1).clamp(0.0, 1.0);
+                        println!(
+                            "Q-criterion domain visible: {:.0}%",
+                            self.q_visible_fraction * 100.0
+                        );
+                    }
+                    PhysicalKey::Code(KeyCode::Digit9) => {
+                        self.flow_visible_fraction =
+                            (self.flow_visible_fraction - 0.1).clamp(0.0, 1.0);
+                        println!(
+                            "Flow-stream domain visible: {:.0}%",
+                            self.flow_visible_fraction * 100.0
+                        );
+                    }
+                    PhysicalKey::Code(KeyCode::Digit0) => {
+                        self.flow_visible_fraction =
+                            (self.flow_visible_fraction + 0.1).clamp(0.0, 1.0);
+                        println!(
+                            "Flow-stream domain visible: {:.0}%",
+                            self.flow_visible_fraction * 100.0
+                        );
+                    }
+                    PhysicalKey::Code(KeyCode::Space) => {
+                        self.is_paused = !self.is_paused;
+                        return false;
                     }
                     _ => return false,
                 }
@@ -291,6 +447,19 @@ impl Renderer<Lbm3D> for DefaultRenderer3D {
         _simulation: &mut Lbm3D,
         encoder: &mut wgpu::CommandEncoder,
     ) {
+        self.streamlines.set_visible_fraction(
+            queue,
+            self.streamline_visible_fraction,
+            self.clip_axis,
+            self.clip_from_max,
+        );
+        self.particles.set_visible_fraction(
+            queue,
+            self.flow_visible_fraction,
+            self.clip_axis,
+            self.clip_from_max,
+        );
+
         if self.show_streamlines && self.needs_q_update {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Streamline Compute Pass"),
@@ -301,11 +470,12 @@ impl Renderer<Lbm3D> for DefaultRenderer3D {
 
         // Q-criterion Marching Cubes: compute Q + generate triangles
         if self.show_q_surface && self.needs_q_update {
-            self.q_surface.prepare(queue, encoder, self.iso_q, self.max_speed);
+            self.q_surface
+                .prepare(queue, encoder, self.iso_q, self.max_speed);
         }
 
         // Compute particle advection for flow streams (every frame if visible)
-        if self.show_flow_streams {
+        if self.show_flow_streams && !self.is_paused {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Particle Compute Pass"),
                 timestamp_writes: None,
@@ -332,7 +502,15 @@ impl Renderer<Lbm3D> for DefaultRenderer3D {
 
         // Update Q surface camera
         if self.show_q_surface {
-            self.q_surface.update_camera(queue, matrix, self.camera.eye, self.max_speed);
+            self.q_surface.update_camera(
+                queue,
+                matrix,
+                self.camera.eye,
+                self.max_speed,
+                self.q_visible_fraction,
+                self.clip_axis,
+                self.clip_from_max,
+            );
         }
     }
 
@@ -346,7 +524,11 @@ impl Renderer<Lbm3D> for DefaultRenderer3D {
 
         // Pass 1: Geometry (Mesh + Q Surface + Streamlines)
         {
-            let needs_depth = self.show_q_surface || self.show_streamlines || self.mesh.is_some();
+            let needs_depth = self.show_q_surface
+                || self.show_streamlines
+                || self.show_flow_streams
+                || self.show_wireframe
+                || (self.show_mesh && self.mesh.is_some());
             let depth_stencil = if needs_depth {
                 Some(wgpu::RenderPassDepthStencilAttachment {
                     view: active_depth,
@@ -367,7 +549,10 @@ impl Renderer<Lbm3D> for DefaultRenderer3D {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.02, g: 0.02, b: 0.02, a: 1.0,
+                            r: 0.02,
+                            g: 0.02,
+                            b: 0.02,
+                            a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -380,8 +565,10 @@ impl Renderer<Lbm3D> for DefaultRenderer3D {
             });
 
             // Draw mesh first (writes depth)
-            if let Some(m) = &self.mesh {
-                m.render(&mut pass);
+            if self.show_mesh {
+                if let Some(m) = &self.mesh {
+                    m.render(&mut pass);
+                }
             }
 
             // Draw Q surface triangles (depth test + write)
@@ -389,33 +576,14 @@ impl Renderer<Lbm3D> for DefaultRenderer3D {
                 self.q_surface.render(&mut pass);
             }
 
-            // Draw streamlines (depth test)
             if self.show_streamlines {
                 self.streamlines.render(&mut pass);
             }
-        }
-
-        // Pass 2: Volume/Particle Raycasting (no depth — overlay on top)
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Volume Raycasting Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
             if self.show_flow_streams {
                 self.particles.render(&mut pass);
+            }
+            if self.show_wireframe {
+                self.wireframe.render(&mut pass);
             }
         }
     }

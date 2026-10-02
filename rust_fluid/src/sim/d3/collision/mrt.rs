@@ -1,5 +1,8 @@
+//! Multiple-relaxation-time collision for the D3Q19 moment basis.
+
 use super::Collision3D;
 
+/// Relaxes D3Q19 moments at individually selected rates.
 pub struct Mrt;
 
 impl Mrt {
@@ -26,7 +29,7 @@ impl Collision3D for Mrt {
     let omega_factor = 1.0 - 0.5 * OMEGA_EFF;
 
     // Multiple-Relaxation-Time (MRT) approximation via Two-Relaxation-Time (TRT)
-    // This is mathematically identical to the "MRT" implementation from the original codebase.
+    // The diagonal rates below act on the D3Q19 moment basis defined here.
     // It achieves MRT-level stability by relaxing symmetric and anti-symmetric moments separately.
     let s_plus = OMEGA_EFF;
     let s_minus = 8.0 * (2.0 - s_plus) / (8.0 - s_plus);

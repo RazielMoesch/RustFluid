@@ -1,101 +1,178 @@
 # RustFluid
 
-## Overview
-RustFluid is a modular Rust/wgpu lattice Boltzmann solver supporting 2D D2Q9 and 3D D3Q19, using WGSL compute shaders.
+RustFluid is a GPU lattice Boltzmann method (LBM) solver written in Rust with
+`wgpu` compute shaders. It provides independent D2Q9 and D3Q19 solvers,
+runtime-selectable collision and boundary components, headless diagnostics and
+benchmarks, and an interactive 3D wind-tunnel renderer.
 
-The codebase is organized around reusable simulation kernels, boundary logic, and rendering passes so you can swap lattices, collision models, forcing, or diagnostics without rewriting the whole solver.
+## Highlights
 
-## Demo
+- D2Q9 and D3Q19 lattices with shader source assembled from Rust traits.
+- BGK/SRT and MRT collision in 2D; BGK/SRT, MRT, TRT, and Smagorinsky LES in 3D.
+- FP32 populations and FP16 storage with FP32 arithmetic (`FP16S`) when the
+  adapter supports `SHADER_F16`.
+- Fluid, halfway bounce-back, free-slip, equilibrium inlet, zero-gradient
+  outlet, and left-face Zou-He velocity boundaries.
+- Per-axis periodicity, three-axis body forcing, uniform or Taylor-Green
+  initialization, and an optional high-X sponge layer.
+- SVG rasterization for 2D obstacles and rotated, scaled STL voxelization for
+  3D geometry. The STL loader also creates a welded display mesh.
+- 3D mesh, domain/geometry wireframe, particle flow, ribbon streamline, and
+  Q-criterion marching-cubes rendering with interactive clipping.
+- GPU diagnostics for equilibrium preservation, AA-pattern parity, closed-box
+  conservation, Taylor-Green decay, and outlet/sponge wake behavior.
 
-<div align="center">
-  <img src="./assets/3d_example.png" alt="3D cylinder wake demo" width="560" />
-  <p><em>Figure 1 — 3D cylinder wake demo (same WGSL-driven solver used for the headless validation case).</em></p>
-</div>
+## Gallery
 
-<div align="center">
-  <img src="./assets/3d_example_2.png" alt="3D F35 Streamlines" width="560" />
-  <p><em>Figure 2 —3D F35 STL File demo of streamlines over object.</em></p>
-</div>
+<p align="center">
+  <img src="assets/3d_example.png" alt="Three-dimensional cylinder wake" width="560" />
+</p>
 
-<div align="center">
-  <img src="./assets/2d_example.png" alt="2D D2Q9 velocity field" width="560" />
-  <p><em>Figure 3 — 2D D2Q9 velocity field shown separately so it is clear this is the 2D case, not the 3D wake.</em></p>
-</div>
+<p align="center">
+  <img src="assets/ferrari_example.png" alt="Ferrari STL in the wind tunnel" width="560" />
+</p>
 
-## Feature list
+<p align="center">
+  <img src="assets/2d_example.png" alt="Two-dimensional D2Q9 velocity field" width="560" />
+</p>
 
-- Supported lattices: D2Q9 (2D) and D3Q19 (3D)
-- Collision model: BGK and MRT; MRT is useful for stability and experimentation, but BGK is the main production path used for the reported cylinder validation
-- Precision modes: FP32, FP16S, and Auto
-- Boundary types: fluid cells, solid bounce-back, free-slip walls, inlet equilibrium, outlet zero-gradient, and Zou-He inlet/velocity handling
-- Forcing: body-force support through `FORCE_X`, `FORCE_Y`, and `FORCE_Z`, including the cylinder-wake forcing pattern used for the FluidX3D-matched case
-- Rendering modes: 2D velocity and curl views, plus 3D vorticity/Q-criterion style visualization and true 3D flow streamlines (ribbon-renderer with flexible spawn domains)
-- Headless benchmarking: automated throughput tests, workgroup sweeps, and CSV export of benchmark results
-- Experimental: FP16S storage, MRT, auto-tuned workgroup selection, and zero/weak forcing drift checks are treated as experimental diagnostics rather than “fully identical” physics guarantees
+## Build and run
 
-## Result in one line
+Requirements are a recent stable Rust toolchain and a GPU/driver supported by
+`wgpu`.
 
-“On an RTX 3050 Laptop GPU, the matched 9.4-million-cell D3Q19 cylinder case reached 1,059.53 MLUPS—77.6% of FluidX3D’s 1,365.17 MLUPS—with mean flow velocity within 0.4% at steps 1,000 and 11,000.”
+```powershell
+cargo check -p rust_fluid --all-targets
+cargo test -p rust_fluid --lib
+```
 
-## Evidence
+The default binary runs the headless FluidX3D cylinder case:
 
-### Correctness comparison
+```powershell
+cargo run --release -p rust_fluid --bin rust_fluid
+```
 
-![FluidX3D vs RustFluid diagnostics](assets/diagnostics.png)
+The explicit benchmark binary runs the same entry point:
 
-The validation compared RustFluid against the FluidX3D reference on the same 768×192×64 cylinder case; the domain contains 205,376 solid cells and 9,231,808 fluid cells. The diagnostic plot reports the same region-by-region mean density and mean velocity checks used in the reference workflow, along with the upstream, near-wake, wake, far-wake, and cylinder-side probe comparisons. The solver tracks density and flow statistics closer to the target at the early and late checkpoints, while still leaving a small residual difference in mean density by step 11,000.
+```powershell
+cargo run --release -p rust_fluid --bin benchmark_3d
+```
 
-### Benchmark methodology
+Run the diagnostic smoke suite with:
 
-- GPU / driver: NVIDIA RTX 3050 Laptop GPU; benchmark was run headlessly with the machine’s current NVIDIA driver installed
-- Grid: 768 × 192 × 64 = 9,437,184 cells
-- Reynolds number / forcing: Re = 200, cylinder diameter D = 64, design velocity `u_design = 0.577`, and the constant forcing term derived from the standard cylinder-wake setup in the reference case
-- Model: D3Q19, SRT/BGK implementation, with FP16S used for the storage-optimized variant
-- Warmup / samples: 1,000 warmup steps; then ten 1,000-step samples
-- Workgroup size: default `32×4×2`, with the `256×1×1` alternative benchmarked separately for comparison; rendering was disabled in the headless runs
-- MLUPS calculation: `MLUPS = (total_cells * total_steps) / elapsed_seconds / 1_000_000`, matching the implementation in `src/sim/benchmark.rs`
+```powershell
+cargo run --release -p rust_fluid --bin diagnose_3d -- --suite smoke
+```
 
-### Small results table
+To launch the interactive STL wind tunnel, change `src/main.rs` to call
+`examples::stl_windtunnel::run` and provide an STL path. The checked-in Ferrari
+asset can be passed as `rust_fluid/assets/ferrari.stl`; omitting the path uses a
+cylinder.
 
-| Solver | MLUPS |
-|---|---:|
-| FluidX3D | 1,365.17 |
-| RustFluid (`32×4×2`) | 1,059.53 |
-| RustFluid (`256×1×1`) | 1,047.40 |
+## FluidX3D comparison case
 
-Auto-tuning and quick workgroup sweep results are kept separate from the main “full benchmark” comparison above, since the short tuning pass is meant to select a good workgroup size rather than to represent a final production benchmark.
+The headless case reproduces the FluidX3D cylinder layout in RustFluid's axis
+ordering:
 
-## Numerical limitations
+- Grid: `768 x 192 x 64` (9,437,184 cells).
+- Solid cylinder: 205,376 cells; diameter 64 lattice units.
+- Model: D3Q19 BGK with FP16 population storage and FP32 arithmetic.
+- Design velocity: `0.577`; Reynolds number: `25,000`.
+- Periodic boundaries on all axes and a constant streamwise body force.
+- FluidX3D `(X, Y, Z)` maps to RustFluid `(Z, X, Y)` for reported probes.
+- The default run auto-tunes workgroup dimensions, warms up for 1,000 steps,
+  then records ten samples of 1,000 steps each.
 
-RustFluid is accurate enough to reproduce the target wake behavior closely, but it is not presented as bit-for-bit identical to FluidX3D. The remaining mean-density difference at step 11,000 is still visible in the diagnostics, and the FP16S empty-box test shows drift under zero or near-zero forcing. That makes the validation more credible than a blanket claim that the solvers are identical, while still showing that the D3Q19 WGSL implementation is viable for real headless throughput and wake-flow analysis.
+The harness prints adapter and driver metadata, MLUPS, density extrema, total
+mass and momentum, mean/RMS velocity, symmetry error, and named probe values.
+MLUPS is calculated from all lattice cells:
 
-## Why the project is easy to extend
+```text
+MLUPS = cells * timed_steps / elapsed_seconds / 1,000,000
+```
 
-The code is intentionally split into modules by responsibility, which makes feature additions small and mechanical:
+The external FluidX3D reference result retained by this project is 1,365.17
+MLUPS. Because performance depends on the adapter, driver, thermal state, and
+selected workgroup, compare that value with the output of a fresh local run
+rather than treating an old RustFluid measurement as fixed.
 
-- `src/sim/lattices/` defines the lattice constants, precision helpers, boundary templates, and collision kernels
-- `src/sim/lbm.rs` compiles the WGSL pipelines, creates the GPU buffers, and dispatches init/step/extract passes
-- `src/setup/` creates domain flags, edge types, and boundary configuration data
-- `src/render/` contains the 2D and 3D visualization passes and shader entry points
-- `src/gpu/` handles device creation, headless GPU setup, and throughput measurement
+### Current measured comparison
 
-This modular structure makes it easy to add your own functionality. For example:
+The full harness was run on October 2, 2026 with the current source and the
+following result:
 
-1. Add a new lattice or collision mode in `src/sim/lattices/components_2d.rs` or `components_3d.rs` and expose it through the matching enum in `src/sim/lattices/mod.rs`.
-2. If you want a new boundary condition, add the flag logic and WGSL template in the lattice component file and make sure the domain flag type (`SimDomain2D` / `SimDomain3D`) can assign the new boundary ID.
-3. If you want a new output mode, add a `RenderMode2D` or `RenderMode3D` variant and connect the WGSL fragment/compute shader in `src/render/`.
-4. If you want a new benchmark or validation pass, add it alongside the existing headless GPU code in `src/test_headless_*.rs` and reuse `src/sim/benchmark.rs` for MLUPS accounting.
+| Solver | Hardware / backend | Workgroup | Median MLUPS | Relative throughput |
+|---|---|---:|---:|---:|
+| FluidX3D reference | RTX 3050 Laptop GPU | reference setup | 1,365.17 | 100.00% |
+| RustFluid | RTX 3050 4GB Laptop GPU, Vulkan, NVIDIA 617.14 | `128x2x1` | 1,161.73 | 85.10% |
 
-Because each concern is isolated, you can prototype new features without needing to rewrite the full solver.
+RustFluid's ten 1,000-step samples ranged from 1,160.61 to 1,162.07 MLUPS, so
+the median is 14.90% below the retained FluidX3D reference. The workgroup
+auto-tuning pass also selected `128x2x1`, where its short measurement reached
+1,162.92 MLUPS. At the final step 11,000, all 9,231,808 fluid cells were
+finite, no fluid cell had negative
+density, mean density was 1.004858152, and mean streamwise RustFluid velocity
+was 0.047689940. These values describe this exact run rather than a portable
+performance guarantee.
+
+### Headless modes
+
+Environment variables select shorter or more diagnostic executions:
+
+| Variable | Effect |
+|---|---|
+| `RUSTFLUID_QUICK_BENCH=1` | Run five 200-step timing samples after a short warmup. |
+| `RUSTFLUID_QUICK_AUDIT=1` | Print initial and step-100 correctness data. |
+| `RUSTFLUID_AUDIT=1` | Print correctness checkpoints through step 11,000. |
+| `RUSTFLUID_BOX_AUDIT=1` | Run positive-, zero-, and negative-force periodic-box checks. |
+| `RUSTFLUID_WGS=64x2x2` | Bypass tuning and use the specified 3D workgroup. |
+| `RUSTFLUID_ZERO_FORCE=1` | Disable cylinder-case body forcing. |
+| `RUSTFLUID_NO_INTERIOR_OPT=1` | Disable the marked all-fluid interior fast path. |
+
+## Interactive controls
+
+The default 3D renderer uses mouse drag to orbit, right-drag to pan, and the
+wheel to zoom. Number keys toggle layers: `1` streamlines, `2` Q-criterion,
+`3` particle flow, `4` wireframe, and `5` the STL mesh. Arrow keys change the
+Q isovalue, brackets change the speed scale, `I`/`P` move the section plane,
+`O` changes its axis, `L` flips its side, and Space pauses the simulation.
+
+Set `RUSTFLUID_RENDER_MODE` to `q`, `streamlines`, `flow_streams`, `wireframe`,
+or `boundaries` to choose the initial layer configuration.
 
 ## Project layout
 
-- `src/example_1_2d.rs` — 2D Windowed svg-flow app
-- `src/example_1_3d.rs` — 3D windowed cylinder-flow app
-- `src/example_2_3d.rs` — 3D windowed F-35 streamline flow app
-- `src/test_headless_2d.rs` — 2D benchmark and validation harness
-- `src/test_headless_3d.rs` — 3D benchmark and diagnostics harness
-- `src/sim/` — lattice definitions, buffers, validation logic, and benchmark math
-- `src/render/` — visualizations and shader pipelines
-- `src/setup/` — simulation domains and boundary setup
-- `src/gpu/` — GPU abstraction and headless benchmarking utilities
+```text
+rust_fluid/src/
+|-- sim/
+|   |-- common/       Precision and GPU readback helpers
+|   |-- d2/           D2Q9 solver, shader compiler, physics, and buffers
+|   `-- d3/           D3Q19 solver, shader compiler, physics, and buffers
+|-- runtime/          Windowed/headless execution and shared traits
+|-- render/           2D views and 3D visualization pipelines
+|-- setup/            Domain flags plus SVG/STL geometry loading
+|-- diagnostics/      Reusable GPU validation cases and result reporting
+|-- benchmark/        Timing statistics, workgroup sweeps, and CSV rows
+|-- validation/       CPU-side field, mass, and stability comparisons
+|-- examples/         Headless comparison and interactive STL tunnel
+`-- bin/              benchmark_3d and diagnose_3d entry points
+```
+
+The solver owns GPU buffers and pipelines. A lattice supplies discrete
+velocities and weights, a collision component supplies the local relaxation
+WGSL, and boundary components supply flag-selected streaming behavior. The
+shader compiler combines them with precision and configuration constants, so
+simulation code does not branch through trait objects inside a GPU step.
+
+See [architecture.md](rust_fluid/architecture.md),
+[adding_a_lattice.md](rust_fluid/adding_a_lattice.md), and
+[adding_a_collision_model.md](rust_fluid/adding_a_collision_model.md) for the
+extension points and their current contracts.
+
+## Numerical scope
+
+The FluidX3D harness is a same-layout comparison and regression tool, not a
+claim of bitwise identity. FP16 storage quantizes populations, GPU reductions
+and execution order differ, and collision or boundary selections change the
+physics. Use the diagnostic suite and the printed full-field statistics when
+changing shaders, precision, boundaries, or workgroup dimensions.

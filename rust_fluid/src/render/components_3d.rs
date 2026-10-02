@@ -1,3 +1,6 @@
+//! Embedded WGSL for vorticity volume construction and ray-marched display.
+
+/// Converts macroscopic velocity into a vorticity volume texture.
 pub(super) const COMPUTE_VORTICITY_3D: &str = r#"
 @id(100) override NX: u32 = 128;
 @id(101) override NY: u32 = 128;

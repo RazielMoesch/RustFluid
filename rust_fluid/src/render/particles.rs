@@ -1,11 +1,15 @@
+//! Compute-advected particles rendered as speed-colored flow streaks.
+
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// GPU particle position with speed stored in the fourth component.
 pub struct Particle {
     pub pos_speed: [f32; 4], // x, y, z, speed
 }
 
+/// Owns particle initialization, advection, clipping, and render pipelines.
 pub struct ParticleRenderer {
     pub compute_pipeline: wgpu::ComputePipeline,
     pub render_pipeline: wgpu::RenderPipeline,
@@ -13,6 +17,10 @@ pub struct ParticleRenderer {
     pub bind_group_compute: wgpu::BindGroup,
     pub bind_group_render: wgpu::BindGroup,
     pub num_particles: u32,
+    clip_buffer: wgpu::Buffer,
+    nx: u32,
+    ny: u32,
+    nz: u32,
 }
 
 impl ParticleRenderer {
@@ -22,6 +30,7 @@ impl ParticleRenderer {
         macro_buffer: &wgpu::Buffer,
         flags_buffer: &wgpu::Buffer,
         format: wgpu::TextureFormat,
+        depth_format: wgpu::TextureFormat,
         nx: u32,
         ny: u32,
         nz: u32,
@@ -46,12 +55,18 @@ impl ParticleRenderer {
             contents: bytemuck::cast_slice(&initial_particles),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
         });
+        let clip_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Particle Clip Uniform"),
+            contents: bytemuck::cast_slice(&[nx as f32, 0.0, 0.0, 0.0]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
 
         // Compute Pipeline for Advection
         let bgl_compute = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Particle Compute BGL"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { // macro_data
+                wgpu::BindGroupLayoutEntry {
+                    // macro_data
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
@@ -61,7 +76,8 @@ impl ParticleRenderer {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { // flags
+                wgpu::BindGroupLayoutEntry {
+                    // flags
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
@@ -71,7 +87,8 @@ impl ParticleRenderer {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { // particles
+                wgpu::BindGroupLayoutEntry {
+                    // particles
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
@@ -88,9 +105,18 @@ impl ParticleRenderer {
             label: Some("Particle Compute BG"),
             layout: &bgl_compute,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: macro_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: flags_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: particle_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: macro_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: flags_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: particle_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -99,11 +125,12 @@ impl ParticleRenderer {
             source: wgpu::ShaderSource::Wgsl(PARTICLE_COMPUTE.into()),
         });
 
-        let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[Some(&bgl_compute)],
-            immediate_size: 0,
-        });
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&bgl_compute)],
+                immediate_size: 0,
+            });
 
         let comp_opts = wgpu::PipelineCompilationOptions {
             constants: &[
@@ -128,7 +155,8 @@ impl ParticleRenderer {
         let bgl_render = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Particle Render BGL"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { // camera
+                wgpu::BindGroupLayoutEntry {
+                    // camera
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -138,7 +166,8 @@ impl ParticleRenderer {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { // colormap
+                wgpu::BindGroupLayoutEntry {
+                    // colormap
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -148,17 +177,30 @@ impl ParticleRenderer {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { // sampler
+                wgpu::BindGroupLayoutEntry {
+                    // sampler
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { // macro_data (for velocity trail)
+                wgpu::BindGroupLayoutEntry {
+                    // macro_data (for velocity trail)
                     binding: 3,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    // Domain-space clipping parameters
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -171,10 +213,26 @@ impl ParticleRenderer {
             label: Some("Particle Render BG"),
             layout: &bgl_render,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: camera_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(colormap_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: macro_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(colormap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: macro_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: clip_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -183,11 +241,12 @@ impl ParticleRenderer {
             source: wgpu::ShaderSource::Wgsl(PARTICLE_RENDER.into()),
         });
 
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[Some(&bgl_render)],
-            immediate_size: 0,
-        });
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&bgl_render)],
+                immediate_size: 0,
+            });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Particle Render Pipeline"),
@@ -223,7 +282,13 @@ impl ParticleRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -236,7 +301,42 @@ impl ParticleRenderer {
             bind_group_compute,
             bind_group_render,
             num_particles,
+            clip_buffer,
+            nx,
+            ny,
+            nz,
         }
+    }
+
+    pub fn set_visible_fraction(
+        &self,
+        queue: &wgpu::Queue,
+        fraction: f32,
+        axis: u32,
+        from_max: bool,
+    ) {
+        let fraction = fraction.clamp(0.0, 1.0);
+        let extent = match axis {
+            1 => self.ny as f32,
+            2 => self.nz as f32,
+            _ => self.nx as f32,
+        };
+        let limit = if from_max {
+            if fraction == 0.0 {
+                extent + 1.0
+            } else {
+                extent * (1.0 - fraction)
+            }
+        } else if fraction == 0.0 {
+            -1.0
+        } else {
+            extent * fraction
+        };
+        queue.write_buffer(
+            &self.clip_buffer,
+            0,
+            bytemuck::cast_slice(&[limit, axis as f32, if from_max { 1.0 } else { 0.0 }, 0.0]),
+        );
     }
 
     pub fn advect<'a>(&'a self, pass: &mut wgpu::ComputePass<'a>) {
@@ -349,11 +449,13 @@ struct Uniforms {
 @group(0) @binding(1) var colormap: texture_1d<f32>;
 @group(0) @binding(2) var samp: sampler;
 @group(0) @binding(3) var<storage, read> macro_data: array<vec4<f32>>;
+@group(0) @binding(4) var<uniform> clip: vec4<f32>;
 
 struct VOut {
     @builtin(position) position: vec4<f32>,
     @location(0) speed: f32,
     @location(1) tail_fade: f32,
+    @location(2) world_pos: vec3<f32>,
 }
 
 fn sample_velocity(p: vec3<f32>) -> vec3<f32> {
@@ -396,17 +498,26 @@ fn vs(@builtin(vertex_index) v_idx: u32, @location(0) pos_speed: vec4<f32>) -> V
     out.position = uniforms.view_proj * vec4<f32>(world_pos, 1.0);
     out.speed = speed;
     out.tail_fade = fade;
+    out.world_pos = world_pos;
     return out;
 }
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let coord = select(in.world_pos.x, select(in.world_pos.y, in.world_pos.z, clip.y > 1.5), clip.y > 0.5);
+    if (clip.z < 0.5) {
+        if (coord > clip.x) { discard; }
+    } else {
+        if (coord < clip.x) { discard; }
+    }
     let normalized = clamp(in.speed / uniforms.max_speed, 0.0, 1.0);
     let sample = textureSampleLevel(colormap, samp, normalized, 0.0);
     let color = sample.rgb;
     
-    // Fade the tail to 0 to clearly show flow direction
-    let alpha = sample.a * in.tail_fade;
+    // Fade toward the tail to show flow direction, but keep it faintly visible.
+    // A fully transparent endpoint makes the
+    // already narrow projected quad disappear under sub-pixel coverage.
+    let alpha = sample.a * mix(0.2, 1.0, in.tail_fade);
     
     return vec4<f32>(color, alpha);
 }

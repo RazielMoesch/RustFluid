@@ -1,5 +1,8 @@
+//! Camera state and input transforms for 2D and 3D views.
+
 use glam::{Mat4, Vec3};
 
+/// Pan-and-zoom camera for planar fields.
 pub struct Camera2D {
     pub center: glam::Vec2,
     pub aspect: f32,
@@ -51,6 +54,7 @@ impl Camera2D {
     }
 }
 
+/// Orbit camera with pan, zoom, and perspective projection.
 pub struct Camera3D {
     pub eye: Vec3,
     pub target: Vec3,
@@ -75,7 +79,7 @@ impl Camera3D {
             up: Vec3::Y,
             aspect: (size.width as f32 / size.height as f32),
             fov: 10.0_f32.to_radians(),
-            znear: 1e-3,
+            znear: 0.1,
             zfar: 1e4,
             yaw: 0.0,
             pitch: 0.0,

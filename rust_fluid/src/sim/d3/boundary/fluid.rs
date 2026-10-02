@@ -1,5 +1,8 @@
+//! Normal three-dimensional fluid-cell streaming.
+
 use super::Boundary3D;
 
+/// Marks cells that use unmodified pull streaming and collision.
 pub struct Fluid;
 
 impl Boundary3D for Fluid {
@@ -12,14 +15,10 @@ impl Boundary3D for Fluid {
     }
 
     fn pull_even(&self) -> Option<&'static str> {
-        Some(r#"
-    pulled_f = load_fa(neighbour_idx + i * TOTAL_CELLS);
-"#)
+        None
     }
 
     fn pull_odd(&self) -> Option<&'static str> {
-        Some(r#"
-    pulled_f = load_fa(neighbour_idx + OPP[i] * TOTAL_CELLS);
-"#)
+        None
     }
 }

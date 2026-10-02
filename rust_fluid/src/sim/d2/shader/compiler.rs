@@ -1,9 +1,12 @@
-use crate::sim::common::precision::PrecisionConfig;
-use crate::sim::d2::lattice::Lattice2D;
-use crate::sim::d2::collision::Collision2D;
-use crate::sim::d2::boundary::Boundary2D;
-use super::templates::*;
+//! Assembles complete D2 WGSL programs from solver components.
 
+use super::templates::*;
+use crate::sim::common::precision::PrecisionConfig;
+use crate::sim::d2::boundary::Boundary2D;
+use crate::sim::d2::collision::Collision2D;
+use crate::sim::d2::lattice::Lattice2D;
+
+/// Stateless source generator for D2 initialization, stepping, and extraction.
 pub struct ShaderCompiler2D;
 
 impl ShaderCompiler2D {
@@ -12,8 +15,9 @@ impl ShaderCompiler2D {
         collision: &dyn Collision2D,
         boundaries: &[&dyn Boundary2D],
         precision_cfg: &PrecisionConfig,
-    ) -> (String, String, String, String) { // (init, step_even, step_odd, extract)
-        
+    ) -> (String, String, String, String) {
+        // (init, step_even, step_odd, extract)
+
         let q = lattice.q();
         let ex_arr = lattice.ex_array();
         let ey_arr = lattice.ey_array();
@@ -22,13 +26,19 @@ impl ShaderCompiler2D {
         // 1. Init Shader
         let init_wgsl = format!("{}\n{}", precision_cfg.enable_directive, BASE_INIT_2D)
             .replace("//{Q}", &lattice.wgsl_constants())
-            .replace("array<f32>; // POP_STORAGE", &format!("array<{}>;", precision_cfg.pop_type))
+            .replace(
+                "array<f32>; // POP_STORAGE",
+                &format!("array<{}>;", precision_cfg.pop_type),
+            )
             .replace("//{PRECISION_HELPERS}", &precision_cfg.init_helpers());
 
         // 2. Extract Shader
         let extract_wgsl = format!("{}\n{}", precision_cfg.enable_directive, BASE_EXTRACT_2D)
             .replace("//{Q}", &lattice.wgsl_constants())
-            .replace("array<f32>; // POP_FA", &format!("array<{}>;", precision_cfg.pop_type))
+            .replace(
+                "array<f32>; // POP_FA",
+                &format!("array<{}>;", precision_cfg.pop_type),
+            )
             .replace("//{PRECISION_HELPERS}", &precision_cfg.extract_helpers());
 
         // 3. Step Shaders
@@ -52,7 +62,11 @@ impl ShaderCompiler2D {
             rho += pulled_f;
             u += vec2<f32>({ex}.0, {ey}.0) * pulled_f;
         }}",
-                dx = dx, dy = dy, i = i, ex = ex_arr[i], ey = ey_arr[i]
+                dx = dx,
+                dy = dy,
+                i = i,
+                ex = ex_arr[i],
+                ey = ey_arr[i]
             ));
 
             unrolled_fast_odd.push_str(&format!(
@@ -65,11 +79,23 @@ impl ShaderCompiler2D {
             rho += pulled_f;
             u += vec2<f32>({ex}.0, {ey}.0) * pulled_f;
         }}",
-                dx = dx, dy = dy, i = i, opp = opp, ex = ex_arr[i], ey = ey_arr[i]
+                dx = dx,
+                dy = dy,
+                i = i,
+                opp = opp,
+                ex = ex_arr[i],
+                ey = ey_arr[i]
             ));
 
-            unrolled_write_even.push_str(&format!("    store_fb(cell_idx + {opp}u * TOTAL_CELLS, f_local[{i}]);\n", opp = opp, i = i));
-            unrolled_write_odd.push_str(&format!("    store_fb(cell_idx + {i}u * TOTAL_CELLS, f_local[{i}]);\n", i = i));
+            unrolled_write_even.push_str(&format!(
+                "    store_fb(cell_idx + {opp}u * TOTAL_CELLS, f_local[{i}]);\n",
+                opp = opp,
+                i = i
+            ));
+            unrolled_write_odd.push_str(&format!(
+                "    store_fb(cell_idx + {i}u * TOTAL_CELLS, f_local[{i}]);\n",
+                i = i
+            ));
         }
 
         let mut boundary_switch_even = String::new();
@@ -80,14 +106,26 @@ impl ShaderCompiler2D {
 
         for b in boundaries {
             if b.type_id() == 0 {
-                if let Some(pull) = b.pull_even() { fallback_fluid_even = pull.to_string(); }
-                if let Some(pull) = b.pull_odd() { fallback_fluid_odd = pull.to_string(); }
+                if let Some(pull) = b.pull_even() {
+                    fallback_fluid_even = pull.to_string();
+                }
+                if let Some(pull) = b.pull_odd() {
+                    fallback_fluid_odd = pull.to_string();
+                }
             }
             if let Some(pull_even) = b.pull_even() {
-                boundary_switch_even.push_str(&format!("case {}u: {{ {} }}\n", b.type_id(), pull_even));
+                boundary_switch_even.push_str(&format!(
+                    "case {}u: {{ {} }}\n",
+                    b.type_id(),
+                    pull_even
+                ));
             }
             if let Some(pull_odd) = b.pull_odd() {
-                boundary_switch_odd.push_str(&format!("case {}u: {{ {} }}\n", b.type_id(), pull_odd));
+                boundary_switch_odd.push_str(&format!(
+                    "case {}u: {{ {} }}\n",
+                    b.type_id(),
+                    pull_odd
+                ));
             }
             if let Some(post) = b.post_streaming() {
                 post_streaming_logic.push_str(post);
@@ -103,8 +141,14 @@ impl ShaderCompiler2D {
             .replace("//{BOUNDARY_SWITCH_CASES_EVEN}", &boundary_switch_even)
             .replace("//{POST_STREAMING_CORRECTION}", &post_streaming_logic)
             .replace("//{COLLISION_LOGIC}", collision.wgsl())
-            .replace("array<f32>; // POP_FA", &format!("array<{}>;", precision_cfg.pop_type))
-            .replace("array<f32>; // POP_FB", &format!("array<{}>;", precision_cfg.pop_type))
+            .replace(
+                "array<f32>; // POP_FA",
+                &format!("array<{}>;", precision_cfg.pop_type),
+            )
+            .replace(
+                "array<f32>; // POP_FB",
+                &format!("array<{}>;", precision_cfg.pop_type),
+            )
             .replace("//{PRECISION_HELPERS}", &precision_cfg.step_helpers())
             .replace("//{REFLECT_X}", lattice.reflect_x().unwrap_or(""))
             .replace("//{REFLECT_Y}", lattice.reflect_y().unwrap_or(""));
@@ -117,8 +161,14 @@ impl ShaderCompiler2D {
             .replace("//{BOUNDARY_SWITCH_CASES_ODD}", &boundary_switch_odd)
             .replace("//{POST_STREAMING_CORRECTION}", &post_streaming_logic)
             .replace("//{COLLISION_LOGIC}", collision.wgsl())
-            .replace("array<f32>; // POP_FA", &format!("array<{}>;", precision_cfg.pop_type))
-            .replace("array<f32>; // POP_FB", &format!("array<{}>;", precision_cfg.pop_type))
+            .replace(
+                "array<f32>; // POP_FA",
+                &format!("array<{}>;", precision_cfg.pop_type),
+            )
+            .replace(
+                "array<f32>; // POP_FB",
+                &format!("array<{}>;", precision_cfg.pop_type),
+            )
             .replace("//{PRECISION_HELPERS}", &precision_cfg.step_helpers())
             .replace("//{REFLECT_X}", lattice.reflect_x().unwrap_or(""))
             .replace("//{REFLECT_Y}", lattice.reflect_y().unwrap_or(""));

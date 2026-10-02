@@ -1,12 +1,16 @@
+//! Lit triangle meshes for imported geometry and generated primitives.
+
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// Position and smooth normal uploaded for one mesh vertex.
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
 }
 
+/// Depth-tested renderer for a static indexed triangle mesh.
 pub struct MeshRenderer {
     pub pipeline: wgpu::RenderPipeline,
     pub vertex_buffer: wgpu::Buffer,
@@ -41,7 +45,11 @@ impl MeshRenderer {
 
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Mesh Depth Texture"),
-            size: wgpu::Extent3d { width: nx, height: ny, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: nx,
+                height: ny,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -53,29 +61,25 @@ impl MeshRenderer {
 
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Mesh Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-            ],
+                count: None,
+            }],
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mesh Bind Group"),
             layout: &bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
         });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -143,7 +147,11 @@ impl MeshRenderer {
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Mesh Depth Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -151,7 +159,9 @@ impl MeshRenderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        self.depth_view = self.depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.depth_view = self
+            .depth_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
     }
 
     pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
@@ -163,7 +173,15 @@ impl MeshRenderer {
     }
 }
 
-pub fn generate_sphere_mesh(cx: f32, cy: f32, cz: f32, r: f32, lat_segments: u32, lon_segments: u32) -> (Vec<Vertex>, Vec<u32>) {
+/// Generates a latitude/longitude sphere mesh in lattice coordinates.
+pub fn generate_sphere_mesh(
+    cx: f32,
+    cy: f32,
+    cz: f32,
+    r: f32,
+    lat_segments: u32,
+    lon_segments: u32,
+) -> (Vec<Vertex>, Vec<u32>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
@@ -204,7 +222,14 @@ pub fn generate_sphere_mesh(cx: f32, cy: f32, cz: f32, r: f32, lat_segments: u32
     (vertices, indices)
 }
 
-pub fn generate_cylinder_mesh(cx: f32, cy: f32, r: f32, height: f32, segments: u32) -> (Vec<Vertex>, Vec<u32>) {
+/// Generates an open-ended cylinder aligned with the Z axis.
+pub fn generate_cylinder_mesh(
+    cx: f32,
+    cy: f32,
+    r: f32,
+    height: f32,
+    segments: u32,
+) -> (Vec<Vertex>, Vec<u32>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
@@ -219,7 +244,7 @@ pub fn generate_cylinder_mesh(cx: f32, cy: f32, r: f32, height: f32, segments: u
             position: [cx + nx * r, cy + ny * r, 0.0],
             normal: [nx, ny, 0.0],
         });
-        
+
         // Top ring (z = height)
         vertices.push(Vertex {
             position: [cx + nx * r, cy + ny * r, height],
@@ -275,18 +300,19 @@ fn vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>) -> VOut 
 }
 
 @fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
-    let light_dir = normalize(vec3<f32>(0.5, 1.0, -0.2));
-    let normal = normalize(in.normal);
-    let view_dir = normalize(uniforms.eye.xyz - in.world_pos);
-    let half_vec = normalize(light_dir + view_dir);
+fn fs(in: VOut, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    var face_normal = normalize(cross(dpdx(in.world_pos), dpdy(in.world_pos)));
     
-    let diff = max(dot(normal, light_dir), 0.0);
-    let spec = pow(max(dot(normal, half_vec), 0.0), 32.0);
+    // Natively flip normals for back-facing triangles to fix broken STL winding
+    if (!is_front) {
+        face_normal = -face_normal;
+    }
     
-    // Nice metallic bright look for obstacles so it feels fully solid/opaque
-    let obj_color = vec3<f32>(0.8, 0.85, 0.9) * (diff + 0.4) + vec3<f32>(1.0, 1.0, 1.0) * spec * 0.8;
+    let light_dir = normalize(vec3<f32>(1.0, 1.0, 2.0));
+    let dot_product = dot(face_normal, -light_dir);
+    let intensity = max(dot_product, 0.1);
     
-    return vec4<f32>(obj_color, 1.0);
+    let base_color = vec3<f32>(0.8, 0.85, 0.9);
+    return vec4<f32>(base_color * intensity, 1.0);
 }
 "#;

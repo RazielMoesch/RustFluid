@@ -1,5 +1,8 @@
+//! GPU storage allocated by a two-dimensional simulation.
+
 use crate::gpu::utils::bg_entry;
 
+/// Population, flags, boundary settings, macro output, and bind groups.
 pub struct SimBuffers2D {
     pub fa: wgpu::Buffer,
     pub fb: wgpu::Buffer,
@@ -58,7 +61,9 @@ impl SimBuffers2D {
         let flags = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Geometry Flags Buffer"),
             size: flags_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 

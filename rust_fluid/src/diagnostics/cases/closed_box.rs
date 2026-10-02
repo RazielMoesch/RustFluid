@@ -1,15 +1,28 @@
+//! Conservation and no-slip checks in a sealed bounce-back box.
+
 use crate::diagnostics::metrics::MacroMetrics;
 use crate::diagnostics::result::DiagnosticResult;
 use crate::runtime::context::HeadlessContext;
 use crate::sim::common::precision::Precision;
-use crate::sim::d3::boundary::fluid::Fluid;
-use crate::sim::d3::boundary::bounce_back::BounceBack;
 use crate::sim::d3::boundary::Boundary3D;
+use crate::sim::d3::boundary::bounce_back::BounceBack;
+use crate::sim::d3::boundary::fluid::Fluid;
 use crate::sim::d3::collision::bgk::Bgk;
 use crate::sim::d3::config::SimulationConfig3D;
 use crate::sim::d3::lattice::d3q19::D3Q19;
 use crate::sim::d3::solver::Lbm3D;
 
+fn mass_tolerance(precision: Precision) -> f32 {
+    match precision {
+        // FP16S is deliberately lossy: every population is rounded when it is
+        // written after each time step. A long transient therefore needs a
+        // wider conservation budget than the FP32 path.
+        Precision::FP16S => 5e-4,
+        Precision::F32 | Precision::Auto => 1e-4,
+    }
+}
+
+/// Runs a closed-box drift test for one precision and grid size.
 pub fn run_closed_box(
     ctx: &HeadlessContext,
     precision: Precision,
@@ -39,11 +52,23 @@ pub fn run_closed_box(
         force_y: 0.0,
         force_z: 0.0,
         periodic_x: false,
+        periodic_y: false,
+        periodic_z: false,
         pure_fluid: false,
         num_boundary_configs: 1,
+        sponge_len: 0,
+        sponge_strength: 0.0,
+        sponge_cfg: 0,
     };
 
-    let mut lbm = Lbm3D::new(ctx.device, config, precision, &lattice, &collision, &boundaries);
+    let mut lbm = Lbm3D::new(
+        ctx.device,
+        config,
+        precision,
+        &lattice,
+        &collision,
+        &boundaries,
+    );
 
     let mut flags = vec![0u32; (nx * nx * nx) as usize];
     let type_id = bounce_back.type_id();
@@ -62,25 +87,33 @@ pub fn run_closed_box(
     let bcs = vec![0.0f32; 4];
     lbm.write_buffers(ctx.queue, &flags, &bcs);
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     lbm.init(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     lbm.extract(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
-    
+
     let data_initial = lbm.download_macro_data(ctx.device, ctx.queue);
     let initial_metrics = MacroMetrics::compute(&data_initial);
     let expected_mass = initial_metrics.rho_mean;
 
     for _ in 0..steps {
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         lbm.step(&mut encoder);
         ctx.queue.submit(std::iter::once(encoder.finish()));
     }
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     lbm.extract(&mut encoder);
     ctx.queue.submit(std::iter::once(encoder.finish()));
 
@@ -88,20 +121,51 @@ pub fn run_closed_box(
     let final_metrics = MacroMetrics::compute(&data_final);
 
     let mass = final_metrics.rho_mean;
-    let mut result = DiagnosticResult::pass(&format!("closed_box_{:?}_{}steps_{}^3", precision, steps, nx));
-    
+    let mut result = DiagnosticResult::pass(&format!(
+        "closed_box_{:?}_{}steps_{}^3",
+        precision, steps, nx
+    ));
+
     if final_metrics.nan_count > 0 {
-        result = DiagnosticResult::fail(&result.name, &format!("NaNs detected: {}", final_metrics.nan_count));
+        result = DiagnosticResult::fail(
+            &result.name,
+            &format!("NaNs detected: {}", final_metrics.nan_count),
+        );
     }
 
     let mass_error = (mass - expected_mass).abs() / expected_mass;
-    if mass_error > 1e-4 {
-        result = DiagnosticResult::fail(&result.name, &format!("Mass is not conserved: expected {}, got {}", expected_mass, mass));
+    let tolerance = mass_tolerance(precision);
+    if mass_error > tolerance {
+        result = DiagnosticResult::fail(
+            &result.name,
+            &format!(
+                "Mass is not conserved: expected {}, got {} (relative error {:.3e}, tolerance {:.1e})",
+                expected_mass, mass, mass_error, tolerance
+            ),
+        );
     }
 
     if final_metrics.max_u > 0.3 {
-        result = DiagnosticResult::warn(&result.name, &format!("Velocity noise in closed box: max_u = {}", final_metrics.max_u));
+        result = DiagnosticResult::warn(
+            &result.name,
+            &format!(
+                "Velocity noise in closed box: max_u = {}",
+                final_metrics.max_u
+            ),
+        );
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fp16s_closed_box_has_a_precision_appropriate_mass_budget() {
+        assert_eq!(mass_tolerance(Precision::F32), 1e-4);
+        assert_eq!(mass_tolerance(Precision::Auto), 1e-4);
+        assert_eq!(mass_tolerance(Precision::FP16S), 5e-4);
+    }
 }

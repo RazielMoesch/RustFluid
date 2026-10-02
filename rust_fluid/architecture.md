@@ -1,54 +1,110 @@
-# RustFluid Refactored Architecture
+# RustFluid architecture
 
-Welcome to the new architecture of RustFluid. The refactor focuses on explicit separation of concerns, composability through traits, and making the codebase friendly to contributors without sacrificing GPU performance.
+RustFluid separates 2D and 3D simulation code while sharing execution,
+precision, diagnostics, and rendering infrastructure. The small amount of
+dimensional duplication keeps shader indexing and boundary behavior explicit.
 
-## Design Philosophy
-1. **Explicit Dimensions:** 2D and 3D simulation code live in completely separate modules (`sim::d2` and `sim::d3`). We prefer slight duplication over convoluted generics that try to abstract away fundamental dimensionality differences.
-2. **Compile-time Composition:** We avoid dynamic trait objects in the hot loops and shader generation. Instead, we use traits like `Lattice3D`, `Collision3D`, and `Boundary3D` to cleanly injectWGSL code strings into a centralized `ShaderCompiler`.
-3. **Single Responsibility:** Files should not be thousands of lines long.
-   - `lattice/` contains purely the discrete velocity sets.
-   - `collision/` contains purely the collision step logic (e.g., BGK, MRT).
-   - `boundary/` contains purely the boundary logic (e.g., fluid streaming, bounce-back, Zou-He).
-   - `shader/` handles composing these blocks into valid WGSL.
-   - `solver.rs` coordinates WGPU pipeline creation and dispatch.
+## Data flow
 
-## Directory Structure
+1. A `SimulationConfig2D` or `SimulationConfig3D` defines the domain,
+   relaxation, forcing, initialization, periodicity, and workgroup shape.
+2. A lattice, collision model, and set of boundary components provide WGSL
+   fragments to the dimensional shader compiler.
+3. The compiler substitutes constants, emits unrolled lattice operations, and
+   produces initialization, alternating AA-pattern step, outlet preparation,
+   and macroscopic extraction shaders.
+4. `Lbm2D` or `Lbm3D` owns the compute pipelines, bind groups, simulation
+   buffers, dispatch geometry, and current AA phase (`step_count`).
+5. A runtime records simulation steps and extraction in either a windowed
+   event loop or a headless loop. Renderers consume extracted macroscopic
+   values stored as velocity plus density.
+
+The 3D macroscopic buffer stores `[u_x, u_y, u_z, rho]` per cell. Population
+storage is in-place and alternates even/odd AA-pattern interpretation; callers
+must use `extract` rather than reading populations directly.
+
+## Module map
+
+```text
+src/
+|-- sim/
+|   |-- common/             Precision code generation and readback
+|   |-- d2/
+|   |   |-- lattice/        D2Q9 constants and direction arrays
+|   |   |-- collision/      BGK and MRT collision fragments
+|   |   |-- boundary/       2D flag-selected boundary fragments
+|   |   |-- shader/         2D templates and composition
+|   |   |-- buffers.rs      Population, flag, boundary, and macro buffers
+|   |   |-- config.rs       D2 configuration
+|   |   `-- solver.rs       Pipeline creation and dispatch
+|   `-- d3/
+|       |-- lattice/        D3Q19 constants and direction arrays
+|       |-- collision/      BGK, MRT, TRT, and Smagorinsky LES
+|       |-- boundary/       3D boundary fragments
+|       |-- shader/         In-place shaders and compiler
+|       |-- buffers.rs      Buffer allocation and byte accounting
+|       |-- config.rs       D3 configuration, periodicity, and sponge
+|       `-- solver.rs       Init, outlet, step, extract, and readback
+|-- runtime/                Generic Simulation and Renderer orchestration
+|-- render/                 Cameras and GPU visualization pipelines
+|-- setup/                  Domain flag generation and geometry loading
+|-- diagnostics/            Repeatable GPU correctness cases
+|-- benchmark/              Timing and CSV helpers
+|-- validation/             CPU-side comparison metrics
+`-- examples/               Complete headless and windowed configurations
 ```
-rust_fluid_refactored/
-├── src/
-│   ├── gpu/
-│   │   ├── utils.rs       # WGPU boilerplate, bind group setup
-│   │   └── mod.rs         # GPU core types
-│   ├── sim/
-│   │   ├── common/
-│   │   │   └── precision.rs # Handles f32 / fp16 storage configurations
-│   │   ├── d2/            # 2D Simulation Core
-│   │   │   ├── boundary/  # Boundary condition implementations
-│   │   │   ├── collision/ # Collision models
-│   │   │   ├── lattice/   # Lattice models (e.g., D2Q9)
-│   │   │   ├── shader/    # 2D Shader compiler and templates
-│   │   │   ├── buffers.rs # 2D WGPU Buffers
-│   │   │   ├── config.rs  # 2D Configuration struct
-│   │   │   └── solver.rs  # Main Lbm2D Orchestrator
-│   │   ├── d3/            # 3D Simulation Core
-│   │   │   ├── boundary/  # Boundary condition implementations
-│   │   │   ├── collision/ # Collision models
-│   │   │   ├── lattice/   # Lattice models (e.g., D3Q19, D3Q27)
-│   │   │   ├── shader/    # 3D Shader compiler and templates
-│   │   │   ├── buffers.rs # 3D WGPU Buffers
-│   │   │   ├── config.rs  # 3D Configuration struct
-│   │   │   └── solver.rs  # Main Lbm3D Orchestrator
-│   │   └── mod.rs
-│   └── lib.rs
-```
 
-## How the Shader Compiler Works
-Instead of maintaining massive WGSL strings with complex branching macros, the `ShaderCompiler` accepts a specific lattice, collision model, and list of boundaries.
+## Shader composition
 
-1. It loads a base template (`BASE_STEP_EVEN`, `BASE_STEP_ODD`).
-2. It requests unrolled fast-paths from the Lattice (based on `EX`, `EY`, `EZ` arrays).
-3. It asks the Collision model for its localized string logic.
-4. It iterates over the provided Boundaries and inserts their specific `pull_even`, `pull_odd`, and `post_streaming` snippets into a switch-case.
-5. It handles precision modifications automatically based on the requested `PrecisionConfig`.
+`Lattice2D` and `Lattice3D` provide WGSL declarations plus native direction
+arrays used to generate unrolled accesses. `Collision2D` and `Collision3D`
+return code that updates the local population array. Boundary traits associate
+a numeric cell type with pull/streaming behavior.
 
-This ensures that adding new physics does not require editing the central template files.
+The compilers specialize shaders for:
+
+- lattice direction count and opposite/reflection maps;
+- collision WGSL;
+- enabled boundary types;
+- FP32 or packed FP16 storage;
+- domain size, workgroup size, relaxation, and force constants;
+- 3D periodic axes, uniform/Taylor-Green initialization, pure-fluid fast path,
+  and optional outlet sponge settings.
+
+The generated source is compiled once when the solver is constructed. Dynamic
+dispatch therefore selects only the AA phase and optional outlet preparation;
+the hot cell update does not use Rust-side virtual dispatch.
+
+## Geometry flags and boundary data
+
+Domain builders produce one `u32` flag per cell. The high byte stores the
+boundary type and the remaining bits carry boundary configuration information
+and internal optimization markers. Boundary configuration records are uploaded
+separately and contain target velocity and density values.
+
+`SimDomain2D` and `SimDomain3D` assign the outer faces and can be augmented with
+SVG- or STL-derived solids. STL loading rotates and uniformly fits the source
+into a requested voxel box, samples triangle surfaces into solid cells, and
+welds sub-voxel triangles for display.
+
+## Runtime and rendering
+
+`Simulation` abstracts initialization, stepping, extraction, and access to the
+macroscopic output. `GraphicsBuilder` combines a simulation factory with a
+`Renderer`; `HeadlessBuilder` runs the same simulation contract without a
+surface.
+
+The 3D default renderer combines STL/cylinder meshes, Q-criterion
+marching-cubes surfaces, compute-generated ribbon streamlines, advected
+particles, and domain/obstacle wireframes. Rendering is downstream of
+extraction and does not alter population state.
+
+## Validation and performance
+
+The `diagnostics` module executes solver-level invariants and returns structured
+pass, warning, or fail results. The `validation` module computes CPU-side field
+errors, mass drift, and invalid-cell reports from downloaded macro data.
+
+The `benchmark` module provides 2D timing statistics and workgroup sweeps. The
+headless 3D example owns the larger FluidX3D-layout benchmark and its detailed
+probe output. Timings synchronize the GPU before measuring completed work.

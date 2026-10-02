@@ -1,8 +1,11 @@
+//! Converts SVG and STL assets into solver flags and display geometry.
+
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg::{Options, Tree};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Positioned two-dimensional solid mask rasterized from an SVG.
 pub struct VoxelGrid2D {
     pub xpos: i32,
     pub ypos: i32,
@@ -13,6 +16,7 @@ pub struct VoxelGrid2D {
     pub path: PathBuf,
 }
 
+/// Positioned three-dimensional solid mask plus a welded display mesh.
 pub struct VoxelGrid3D {
     pub xpos: i32,
     pub ypos: i32,
@@ -23,6 +27,7 @@ pub struct VoxelGrid3D {
     pub data: Vec<bool>,
     pub path: PathBuf,
     pub mesh_vertices: Vec<[f32; 3]>,
+    pub mesh_normals: Vec<[f32; 3]>,
     pub mesh_indices: Vec<u32>,
 }
 
@@ -62,14 +67,12 @@ impl VoxelGrid2D {
     }
 
     pub fn rotate(&mut self, rotation_deg: f32) -> Result<(), String> {
-        // To maintain size semantics, we should load it at the current target_width and target_height
-        // However, rotating changes the width and height.
-        // We will pass the *original* target_width and target_height (before rotation was applied).
-        // Since we don't store the original target dimensions, we must re-calculate them.
+        // Recover the pre-rotation target box so repeated rotations do not
+        // progressively inflate the raster dimensions.
         let rad = self.rotation_deg.to_radians();
         let cos_r = rad.cos().abs();
         let sin_r = rad.sin().abs();
-        
+
         let denom = cos_r * cos_r - sin_r * sin_r;
         let orig_width = if denom.abs() > 1e-4 {
             ((self.width as f32 * cos_r - self.height as f32 * sin_r) / denom).max(1.0)
@@ -83,7 +86,12 @@ impl VoxelGrid2D {
         };
 
         self.rotation_deg += rotation_deg;
-        let new_grid = Loader::load_svg(&self.path, orig_width.round() as u32, orig_height.round() as u32, self.rotation_deg)?;
+        let new_grid = Loader::load_svg(
+            &self.path,
+            orig_width.round() as u32,
+            orig_height.round() as u32,
+            self.rotation_deg,
+        )?;
         self.width = new_grid.width;
         self.height = new_grid.height;
         self.data = new_grid.data;
@@ -105,7 +113,15 @@ impl VoxelGrid3D {
         target_height: u32,
         target_depth: u32,
     ) -> Result<Self, String> {
-        Loader::load_stl(&self.path, target_width, target_height, target_depth, 0.0, 0.0, 0.0)
+        Loader::load_stl(
+            &self.path,
+            target_width,
+            target_height,
+            target_depth,
+            0.0,
+            0.0,
+            0.0,
+        )
     }
 
     pub fn translate(&mut self, x: i32, y: i32, z: i32) {
@@ -115,9 +131,11 @@ impl VoxelGrid3D {
     }
 }
 
+/// Stateless entry point for SVG rasterization and STL voxelization.
 pub struct Loader;
 
 impl Loader {
+    /// Rasterizes an SVG into a rotated, aspect-preserving boolean mask.
     pub fn load_svg<P: AsRef<Path>>(
         path: P,
         target_width: u32,
@@ -154,7 +172,7 @@ impl Loader {
 
         let cx = svg_size.width() / 2.0;
         let cy = svg_size.height() / 2.0;
-        
+
         let rot_cx = final_width as f32 / 2.0;
         let rot_cy = final_height as f32 / 2.0;
 
@@ -189,6 +207,7 @@ impl Loader {
         })
     }
 
+    /// Rotates and fits an STL, samples its surface, and builds a display mesh.
     pub fn load_stl<P: AsRef<Path>>(
         path: P,
         target_width: u32,
@@ -230,13 +249,19 @@ impl Loader {
         let ry = rot_y_deg.to_radians();
         let rz = rot_z_deg.to_radians();
 
-        let cos_x = rx.cos(); let sin_x = rx.sin();
-        let cos_y = ry.cos(); let sin_y = ry.sin();
-        let cos_z = rz.cos(); let sin_z = rz.sin();
+        let cos_x = rx.cos();
+        let sin_x = rx.sin();
+        let cos_y = ry.cos();
+        let sin_y = ry.sin();
+        let cos_z = rz.cos();
+        let sin_z = rz.sin();
 
-        min_x = f32::MAX; max_x = f32::MIN;
-        min_y = f32::MAX; max_y = f32::MIN;
-        min_z = f32::MAX; max_z = f32::MIN;
+        min_x = f32::MAX;
+        max_x = f32::MIN;
+        min_y = f32::MAX;
+        max_y = f32::MIN;
+        min_z = f32::MAX;
+        max_z = f32::MIN;
 
         let mut rotated_vertices = Vec::with_capacity(mesh.vertices.len());
         for v in &mesh.vertices {
@@ -246,15 +271,18 @@ impl Loader {
 
             let y1 = y * cos_x - z * sin_x;
             let z1 = y * sin_x + z * cos_x;
-            y = y1; z = z1;
+            y = y1;
+            z = z1;
 
             let x1 = x * cos_y + z * sin_y;
             let z2 = -x * sin_y + z * cos_y;
-            x = x1; z = z2;
+            x = x1;
+            z = z2;
 
             let x2 = x * cos_z - y * sin_z;
             let y2 = x * sin_z + y * cos_z;
-            x = x2; y = y2;
+            x = x2;
+            y = y2;
 
             min_x = min_x.min(x);
             max_x = max_x.max(x);
@@ -262,7 +290,7 @@ impl Loader {
             max_y = max_y.max(y);
             min_z = min_z.min(z);
             max_z = max_z.max(z);
-            
+
             rotated_vertices.push([x, y, z]);
         }
 
@@ -287,8 +315,18 @@ impl Loader {
         };
 
         let mut mesh_vertices = Vec::new();
+        let mut mesh_normals = Vec::new();
         let mut mesh_indices = Vec::new();
         let mut index_map = std::collections::HashMap::new();
+        let mut triangle_set = std::collections::HashSet::new();
+
+        // The source STL can contain millions of triangles even though the
+        // simulation only resolves geometry at lattice scale.  Weld the
+        // visualization mesh to half-cell coordinates while retaining the
+        // original triangles below for voxelization.  This avoids spending
+        // most render time drawing sub-voxel detail that cannot affect the
+        // simulation or be seen at the target resolution.
+        const RENDER_QUANTIZATION: f32 = 0.5;
 
         for face in &mesh.faces {
             let v0_orig = rotated_vertices[face.vertices[0]];
@@ -307,14 +345,44 @@ impl Loader {
             let v1 = transform(v1_orig);
             let v2 = transform(v2_orig);
 
-            for v in &[v0, v1, v2] {
-                let key = (v[0].to_bits(), v[1].to_bits(), v[2].to_bits());
+            let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+            let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+            let nx = e1[1] * e2[2] - e1[2] * e2[1];
+            let ny = e1[2] * e2[0] - e1[0] * e2[2];
+            let nz = e1[0] * e2[1] - e1[1] * e2[0];
+
+            let mut idxs = [0u32; 3];
+            for (i, v) in [v0, v1, v2].iter().enumerate() {
+                let qx = (v[0] / RENDER_QUANTIZATION).round() as i32;
+                let qy = (v[1] / RENDER_QUANTIZATION).round() as i32;
+                let qz = (v[2] / RENDER_QUANTIZATION).round() as i32;
+                let key = (qx, qy, qz);
                 let idx = *index_map.entry(key).or_insert_with(|| {
                     let new_idx = mesh_vertices.len() as u32;
-                    mesh_vertices.push(*v);
+                    mesh_vertices.push([
+                        qx as f32 * RENDER_QUANTIZATION,
+                        qy as f32 * RENDER_QUANTIZATION,
+                        qz as f32 * RENDER_QUANTIZATION,
+                    ]);
+                    mesh_normals.push([0.0, 0.0, 0.0]);
                     new_idx
                 });
-                mesh_indices.push(idx);
+                idxs[i] = idx;
+            }
+
+            // Quantization collapses many tiny source triangles.  Skip those
+            // and remove duplicate triangles before uploading the GPU mesh.
+            if idxs[0] != idxs[1] && idxs[1] != idxs[2] && idxs[0] != idxs[2] {
+                let mut triangle_key = idxs;
+                triangle_key.sort_unstable();
+                if triangle_set.insert(triangle_key) {
+                    mesh_indices.extend_from_slice(&idxs);
+                    for idx in idxs {
+                        mesh_normals[idx as usize][0] += nx;
+                        mesh_normals[idx as usize][1] += ny;
+                        mesh_normals[idx as usize][2] += nz;
+                    }
+                }
             }
 
             let mut max_dist = 0.0_f32;
@@ -355,6 +423,17 @@ impl Loader {
             }
         }
 
+        for n in &mut mesh_normals {
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if len > 0.0 {
+                n[0] /= len;
+                n[1] /= len;
+                n[2] /= len;
+            } else {
+                n[1] = 1.0;
+            }
+        }
+
         Ok(VoxelGrid3D {
             xpos: 0,
             ypos: 0,
@@ -365,6 +444,7 @@ impl Loader {
             data,
             path: path.to_path_buf(),
             mesh_vertices,
+            mesh_normals,
             mesh_indices,
         })
     }

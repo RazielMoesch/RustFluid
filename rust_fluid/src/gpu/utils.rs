@@ -1,3 +1,5 @@
+//! Small constructors that keep repetitive `wgpu` descriptors consistent.
+
 use crate::gpu::GPU;
 
 pub fn create_buffer(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {

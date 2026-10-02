@@ -1,66 +1,83 @@
-# Adding a New Lattice
+# Adding a lattice
 
-Lattices define the discrete velocity directions and equilibrium weights for the simulation. Thanks to the new architecture, adding a new lattice (like D3Q27) is incredibly simple and requires modifying exactly zero existing files.
+A lattice defines discrete directions, equilibrium weights, opposite-direction
+mapping, and optional reflection maps. RustFluid needs both WGSL declarations
+and matching Rust slices because the shader compiler generates unrolled cell
+accesses from the native arrays.
 
-## Step 1: Create a new file
-Create a new file in `src/sim/d3/lattice/d3q27.rs` (or `d2` for 2D lattices).
+## 1. Implement the dimensional trait
 
-## Step 2: Implement the Trait
-Implement the `Lattice3D` (or `Lattice2D`) trait. The trait requires returning the dimension `q` and string arrays for the WGSL shader, as well as native Rust arrays for CPU-side shader unrolling.
+Create a module under `src/sim/d2/lattice/` or `src/sim/d3/lattice/` and
+implement `Lattice2D` or `Lattice3D`. Use `d2q9.rs` or `d3q19.rs` as the
+canonical example.
 
 ```rust
 use super::Lattice3D;
 
-pub struct D3Q27;
+pub struct MyLattice;
 
-impl D3Q27 {
+impl MyLattice {
     pub fn new() -> Self { Self }
 }
 
-impl Lattice3D for D3Q27 {
-    fn name(&self) -> &'static str { "D3Q27" }
+impl Lattice3D for MyLattice {
+    fn name(&self) -> &'static str { "MyLattice" }
     fn q(&self) -> u32 { 27 }
 
-    // Provide the WGSL strings. 
-    fn ex(&self) -> &'static str {
-        r#"
-const EX = array<i32, 27>( ... );
-"#
-    }
+    fn ex(&self) -> &'static str { "const EX = array<i32, 27>(/* ... */);" }
+    fn ey(&self) -> &'static str { "const EY = array<i32, 27>(/* ... */);" }
+    fn ez(&self) -> &'static str { "const EZ = array<i32, 27>(/* ... */);" }
+    fn weights(&self) -> &'static str { "const WEIGHTS = array<f32, 27>(/* ... */);" }
+    fn opp(&self) -> &'static str { "const OPP = array<u32, 27>(/* ... */);" }
 
-    fn ey(&self) -> &'static str { /* ... */ }
-    fn ez(&self) -> &'static str { /* ... */ }
-    fn weights(&self) -> &'static str { /* ... */ }
-    fn opp(&self) -> &'static str { /* ... */ }
+    fn reflect_x(&self) -> Option<&'static str> { None }
+    fn reflect_y(&self) -> Option<&'static str> { None }
+    fn reflect_z(&self) -> Option<&'static str> { None }
 
-    // Optionally provide reflection indices if your lattice supports free-slip boundaries
-    fn reflect_x(&self) -> Option<&'static str> { Some(...) }
-
-    // Finally, provide the exact same array data for Rust to use when generating the fast path unrolling!
-    fn ex_array(&self) -> &[i32] { &[ ... ] }
-    fn ey_array(&self) -> &[i32] { &[ ... ] }
-    fn ez_array(&self) -> &[i32] { &[ ... ] }
-    fn opp_array(&self) -> &[u32] { &[ ... ] }
+    fn ex_array(&self) -> &[i32] { &[/* ... */] }
+    fn ey_array(&self) -> &[i32] { &[/* ... */] }
+    fn ez_array(&self) -> &[i32] { &[/* ... */] }
+    fn opp_array(&self) -> &[u32] { &[/* ... */] }
 }
 ```
 
-## Step 3: Export and Use
-Export your new lattice in `src/sim/d3/lattice/mod.rs`:
+The literal WGSL array lengths must equal `q()`, every native slice must have
+the same length, each `opp_array()[i]` must point to the opposite direction,
+and the weights should sum to one. Reflection strings are required when the
+lattice is used with the corresponding free-slip boundary.
+
+## 2. Export the module
+
+Add the module to the dimensional `lattice/mod.rs`:
+
 ```rust
-pub mod d3q27;
+pub mod my_lattice;
 ```
 
-You can now immediately use it when constructing an `Lbm3D` instance:
-```rust
-let lattice = D3Q27::new();
-let solver = Lbm3D::new(
-    &device,
-    config,
-    Precision::F32,
-    &lattice,
-    &collision,
-    &boundaries
-);
+## 3. Remove fixed-Q assumptions
+
+The compiler is lattice-driven, but buffer allocation and some optimized shader
+paths currently assume D2Q9 or D3Q19. Before using a different `q`, audit:
+
+- the `q` passed to `SimBuffers2D::new` or `SimBuffers3D::new`;
+- fixed-size WGSL local arrays and loops in shader templates;
+- collision models that explicitly assume 9 or 19 directions;
+- free-slip reflection tables;
+- benchmark byte accounting and tests.
+
+Adding a module alone is therefore not enough for D3Q27 today. Keep these
+couplings explicit until the solver derives every allocation and template size
+from the selected lattice.
+
+## 4. Validate
+
+Add unit tests for array lengths, opposite pairs, direction symmetry, and weight
+sum. Then run:
+
+```powershell
+cargo test -p rust_fluid --lib
+cargo run --release -p rust_fluid --bin diagnose_3d -- --suite smoke
 ```
 
-The Shader Compiler handles everything else for you, including completely unrolling the hot loops for your specific `q` count and directional vectors.
+For a new 3D lattice, also compare a headless equilibrium case in FP32 before
+testing FP16 storage or complex boundaries.

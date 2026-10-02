@@ -1,1 +1,1 @@
-// Empty for now
+//! Reserved for composable two-dimensional force models.

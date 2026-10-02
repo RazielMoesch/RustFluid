@@ -1,5 +1,8 @@
+//! Two-relaxation-time collision for opposite D3Q19 populations.
+
 use super::Collision3D;
 
+/// Separately relaxes symmetric and antisymmetric population components.
 pub struct Trt;
 
 impl Trt {
@@ -31,8 +34,7 @@ impl Collision3D for Trt {
     
     var f_pre = f_local;
 
-    // Note: the loop here assumes Q = 19 (for D3Q19 specifically), which is a coupling.
-    // If we want to support any Q, we should use Q. But we keep it as 19u for now as in original.
+    // This moment pairing is specifically ordered for D3Q19.
     // Actually, we can use `Q` since it's defined as constant.
     for (var i: u32 = 0u; i < Q; i += 1u) {
         let e_vec = vec3<f32>(f32(EX[i]), f32(EY[i]), f32(EZ[i]));
